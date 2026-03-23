@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+龙虾上传 - 四平台统一 CLI 入口
+
+用法:
+  python upload.py --platform <平台> <视频路径> [标题] [文案] [标签]
+
+平台: douyin | kuaishou | shipinhao | xiaohongshu
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+if sys.version_info < (3, 10):
+    print("❌ 需要 Python 3.10+")
+    sys.exit(1)
+
+
+PLATFORMS = ("douyin", "kuaishou", "shipinhao", "xiaohongshu")
+
+
+def _dispatch_douyin(video_path: str, title: str, description: str, tags: list, **kw) -> bool:
+    from platforms.douyin_upload.api import upload_to_douyin
+    return upload_to_douyin(
+        video_path=video_path,
+        title=title,
+        description=description,
+        tags=tags,
+        **kw,
+    )
+
+
+def _dispatch_kuaishou(video_path: str, title: str, description: str, tags: list, **kw) -> bool:
+    from platforms.ks_upload.upload import upload
+    return upload(
+        video_path=video_path,
+        title=title,
+        description=description,
+        tags=tags,
+        **kw,
+    )
+
+
+def _dispatch_shipinhao(video_path: str, title: str, description: str, tags: list, **kw) -> bool:
+    from platforms.shipinhao_upload.api import upload_to_shipinhao
+    return upload_to_shipinhao(
+        video_path=video_path,
+        title=title,
+        description=description,
+        tags=tags,
+        **kw,
+    )
+
+
+def _dispatch_xiaohongshu(video_path: str, title: str, description: str, tags: list, **kw) -> bool:
+    from platforms.xhs_upload.upload import upload
+    return upload(
+        video_path=video_path,
+        title=title,
+        description=description,
+        tags=tags,
+        **kw,
+    )
+
+
+_DISPATCH = {
+    "douyin": _dispatch_douyin,
+    "kuaishou": _dispatch_kuaishou,
+    "shipinhao": _dispatch_shipinhao,
+    "xiaohongshu": _dispatch_xiaohongshu,
+}
+
+
+def upload(
+    platform: str,
+    video_path: str,
+    title: str = "",
+    description: str = "",
+    tags: list | None = None,
+    account_name: str = "default",
+    handle_login: bool = True,
+) -> bool:
+    """
+    统一上传入口
+    :param platform: douyin | kuaishou | shipinhao | xiaohongshu
+    :param video_path: 视频路径
+    :param title: 标题（视频号可空，自动生成）
+    :param description: 文案
+    :param tags: 标签列表
+    :param account_name: 账号名
+    :param handle_login: 未登录时是否打开浏览器
+    """
+    platform = platform.lower().strip()
+    if platform not in _DISPATCH:
+        print(f"❌ 未知平台: {platform}，可选: {', '.join(PLATFORMS)}")
+        return False
+
+    tags = tags or []
+    tags = [t.strip() for t in tags if t]
+
+    return _DISPATCH[platform](
+        video_path=video_path,
+        title=title,
+        description=description,
+        tags=tags,
+        account_name=account_name,
+        handle_login=handle_login,
+    )
+
+
+def _main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="龙虾上传 - 抖音/快手/视频号/小红书 统一入口",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  python upload.py --platform douyin /path/video.mp4 "标题" "文案" "标签1,标签2"
+  python upload.py --platform kuaishou video.mp4 "标题" "文案"
+  python upload.py --platform shipinhao video.mp4 "" "" "标签1,标签2"   # 空标题/文案自动生成
+  python upload.py --platform xiaohongshu video.mp4 "标题"
+        """,
+    )
+    parser.add_argument("--platform", "-p", required=True, choices=PLATFORMS, help="目标平台")
+    parser.add_argument("video_path", help="视频文件路径")
+    parser.add_argument("title", nargs="?", default="", help="标题")
+    parser.add_argument("description", nargs="?", default="", help="文案")
+    parser.add_argument("tags", nargs="?", default="", help="标签，逗号分隔")
+    parser.add_argument("--account", default="default", help="账号名")
+    parser.add_argument("--no-login", action="store_true", help="未登录时不自动打开浏览器")
+    args = parser.parse_args()
+
+    tags_list = [t.strip() for t in args.tags.split(",") if t.strip()]
+
+    ok = upload(
+        platform=args.platform,
+        video_path=args.video_path,
+        title=args.title,
+        description=args.description,
+        tags=tags_list,
+        account_name=args.account,
+        handle_login=not args.no_login,
+    )
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    _main()

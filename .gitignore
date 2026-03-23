@@ -1,0 +1,29 @@
+# Python
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 日志与缓存
+*.log
+logs/
+
+# 登录态与用户数据（不要提交）
+cookies/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.cursor/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xhs-upload"
+version = "0.1.0"
+description = "小红书视频上传工具"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "nodriver>=0.45",
+    "loguru",
+]
+
+[tool.setuptools.packages.find]
+include = ["xiaohongshu*", "utils*"]

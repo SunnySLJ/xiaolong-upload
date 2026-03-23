@@ -1,0 +1,5 @@
+.venv/
+cookies/
+logs/
+*.pyc
+__pycache__/

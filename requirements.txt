@@ -1,0 +1,4 @@
+# 龙虾上传 - 四平台统一依赖（Python 3.10+）
+nodriver>=0.45
+loguru
+pyautogui
