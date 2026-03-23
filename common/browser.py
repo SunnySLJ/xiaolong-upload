@@ -70,7 +70,8 @@ async def get_browser(
         sandbox=False,
     )
 
-    if auth_mode == "connect":
+    # connect: 连接已有 Chrome；cookie 模式在 try_reuse 时也可连接（用于 connect 脚本 + cookie 文件）
+    if auth_mode == "connect" or (auth_mode == "cookie" and try_reuse_chrome and cdp_debug_port):
         try:
             port = int(cdp_endpoint.rstrip("/").rsplit(":", 1)[-1])
         except (ValueError, IndexError):

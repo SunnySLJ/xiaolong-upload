@@ -9,6 +9,22 @@ import json
 import sys
 import time
 
+# 修复 nodriver Cookie.from_json 在新版 Chrome 中缺少 sameParty 的 KeyError
+def _patch_nodriver_cookie():
+    try:
+        from nodriver.cdp import network
+        _orig_from_json = network.Cookie.from_json
+        @classmethod
+        def _patched(cls, json_dict):
+            d = dict(json_dict)
+            if "sameParty" not in d:
+                d["sameParty"] = False
+            return _orig_from_json.__func__(cls, d)
+        network.Cookie.from_json = _patched
+    except Exception:
+        pass
+_patch_nodriver_cookie()
+
 import nodriver as uc
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
 from kuaishou.browser import get_browser
@@ -656,8 +672,8 @@ class KuaishouVideo(object):
                     pass
                 await tab.sleep(0.3)
 
-            _step_log("Step 6: 等待发布完成...")
-            for idx in range(60):
+            _step_log("Step 6: 等待发布完成...（最多 12 秒）")
+            for idx in range(30):
                 await tab.sleep(0.4)
                 url = (tab.url or "").lower()
                 if "success" in url or "manage" in url or "article" in url and "publish" not in url:
@@ -666,10 +682,10 @@ class KuaishouVideo(object):
                 if await _has_text(tab, "发布成功", timeout=1):
                     _step_log("视频发布成功")
                     break
-                if idx > 0 and idx % 5 == 0:
-                    _step_log(f"发布中... {idx * 0.4:.0f}s")
+                if idx > 0 and idx % 10 == 0:
+                    _step_log(f"等待发布结果... ({idx * 0.4:.0f}s)")
             else:
-                kuaishou_logger.info("[-] Step 6: 发布流程已触发，请稍后到创作者中心确认")
+                kuaishou_logger.info("[-] 发布已提交，即将退出")
 
             if need_cookie_file(AUTH_MODE):
                 try:

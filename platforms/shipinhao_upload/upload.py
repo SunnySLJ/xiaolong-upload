@@ -21,7 +21,7 @@ for p in (_ROOT, _PROJECT_ROOT):
         sys.path.insert(0, str(p))
 
 if sys.version_info < (3, 10):
-    print("❌ 需要 Python 3.10+")
+    print("[X] 需要 Python 3.10+")
     sys.exit(1)
 
 from conf import COOKIES_DIR
@@ -54,7 +54,7 @@ def upload(
     video_path = str(Path(video_path).resolve())
 
     if not Path(video_path).exists():
-        print(f"❌ 视频不存在: {video_path}")
+        print(f"[X] 视频不存在: {video_path}")
         return False
 
     COOKIES_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,14 +67,14 @@ def upload(
             )
         except Exception as e:
             import traceback
-            print(f"❌ 登录异常: {e}")
+            print(f"[X] 登录异常: {e}")
             traceback.print_exc()
             return False
         if not ok:
-            print("❌ 请先用微信扫码登录")
+            print("[X] 请先用微信扫码登录")
             return False
 
-        print("✅ 登录完成，开始上传...")
+        print("[OK] 登录完成，开始上传...")
         pub_date = publish_date if isinstance(publish_date, datetime) else 0
         app = ShipinhaoVideo(
             title=(title or "")[:64],
@@ -95,7 +95,7 @@ def upload(
                 await app.upload()
         except Exception as e:
             import traceback
-            print(f"❌ 上传异常: {e}")
+            print(f"[X] 上传异常: {e}")
             traceback.print_exc()
             return False
         return True
@@ -104,7 +104,7 @@ def upload(
         return asyncio.run(_do())
     except Exception as e:
         import traceback
-        print(f"❌ 异常: {e}")
+        print(f"[X] 异常: {e}")
         traceback.print_exc()
         return False
 

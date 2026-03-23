@@ -7,6 +7,22 @@ import os
 import asyncio
 import json
 
+# 修复 nodriver Cookie.from_json 在新版 Chrome 中缺少 sameParty 的 KeyError
+def _patch_nodriver_cookie():
+    try:
+        from nodriver.cdp import network
+        _orig_from_json = network.Cookie.from_json
+        @classmethod
+        def _patched(cls, json_dict):
+            d = dict(json_dict)
+            if "sameParty" not in d:
+                d["sameParty"] = False
+            return _orig_from_json.__func__(cls, d)
+        network.Cookie.from_json = _patched
+    except Exception:
+        pass
+_patch_nodriver_cookie()
+
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
 from xiaohongshu.browser import get_browser
 from common.utils import need_cookie_file
@@ -19,17 +35,20 @@ XHS_TAGS_MAX = 5
 
 
 def _js_find_file_input():
-    """查找 file input：支持 iframe + shadow DOM（与视频号逻辑一致）"""
+    """查找 file input：支持 iframe + shadow DOM，多种 selector"""
     return """
     (function(){
         function findIn(el){
-            var inp = el.querySelector('input[type=file][accept*="video"]');
-            if(inp) return inp;
-            inp = el.querySelector('input[type=file]');
-            return inp || null;
+            var sel = ['input[type=file][accept*="video"]','input[type=file][accept*="mp4"]',
+                       'input[type=file][accept*="*"]','input[type=file]'];
+            for(var i=0;i<sel.length;i++){
+                var inp = el.querySelector(sel[i]);
+                if(inp) return inp;
+            }
+            return null;
         }
         function search(doc, depth){
-            if(!doc || depth>4) return null;
+            if(!doc || depth>5) return null;
             var r = findIn(doc);
             if(r) return r;
             var ifs = doc.querySelectorAll('iframe');
@@ -76,7 +95,7 @@ async def _upload_file_via_cdp(tab, file_path: str) -> bool:
         await tab.send(cdp.dom.set_file_input_files(files=[abs_path], object_id=oid))
         return True
     except Exception as e:
-        xiaohongshu_logger.debug(f"CDP 上传 fallback 失败: {e}")
+        xiaohongshu_logger.warning(f"[-] CDP 上传失败: {e}")
         return False
 
 
@@ -95,13 +114,18 @@ async def _upload_file_via_native_dialog(tab, file_path: str) -> bool:
                     if platform.system() == "Darwin":
                         pyautogui.hotkey("command", "shift", "g")
                     else:
-                        pyautogui.hotkey("ctrl", "l")
+                        pyautogui.hotkey("alt", "d")  # Windows: 聚焦地址栏
                     await asyncio.sleep(0.5)
                     pyautogui.write(abs_path, interval=0.02)
                     await asyncio.sleep(0.3)
                     pyautogui.press("enter")
                     await asyncio.sleep(0.5)
                     pyautogui.press("enter")
+                    await asyncio.sleep(1)
+                    # 关闭可能残留的文件选择对话框
+                    for _ in range(2):
+                        pyautogui.press("escape")
+                        await asyncio.sleep(0.2)
                     xiaohongshu_logger.info("[-] 已通过系统对话框填入路径")
                     return True
             except Exception:
@@ -345,16 +369,22 @@ class XiaohongshuVideo(object):
 
             async def _do_step1():
                 xiaohongshu_logger.info("[-] Step 1: 查找上传 input...")
-                # 1) 先尝试点击「选择视频/上传视频」露出上传区域（页面可能默认在图文）
-                for btn_text in ("选择视频", "上传视频", "点击上传"):
+                # 1) 先尝试点击上传区域（拖拽区或按钮）露出 file input
+                for btn_text in ("拖拽视频到此或点击上传", "选择视频", "上传视频", "点击上传"):
                     try:
-                        btn = await tab.find(btn_text, best_match=True, timeout=1.5)
+                        btn = await tab.find(btn_text, best_match=True, timeout=2)
                         if btn:
                             xiaohongshu_logger.info(f"[-] 点击「{btn_text}」...")
+                            try:
+                                await btn.scroll_into_view()
+                                await tab.sleep(0.3)
+                            except Exception:
+                                pass
                             await btn.click()
-                            await tab.sleep(2)
+                            await tab.sleep(2.5)
                             break
-                    except Exception:
+                    except Exception as e:
+                        xiaohongshu_logger.debug(f"[-] 未找到「{btn_text}」: {e}")
                         continue
 
                 upload_inp = None
@@ -369,7 +399,7 @@ class XiaohongshuVideo(object):
                     except Exception:
                         continue
                 if not upload_inp:
-                    for sel in ("div[class^='upload-content'] input.upload-input", "input.upload-input"):
+                    for sel in ("div[class^='upload-content'] input.upload-input", "input.upload-input", "[class*='upload'] input[type='file']"):
                         try:
                             upload_inp = await tab.select(sel, timeout=_t)
                             if upload_inp:
@@ -377,6 +407,8 @@ class XiaohongshuVideo(object):
                                 break
                         except Exception:
                             continue
+                if not upload_inp:
+                    xiaohongshu_logger.info("[-] CSS 未找到 input，尝试 CDP 深度查找...")
                 if upload_inp:
                     try:
                         await upload_inp.send_file(self.file_path)
@@ -389,19 +421,42 @@ class XiaohongshuVideo(object):
                     xiaohongshu_logger.info("[-] Step 1 完成: CDP 已设置文件")
                     return True
 
+                xiaohongshu_logger.info("[-] CDP 未成功，尝试再次点击上传区域...")
+                for btn_text in ("上传视频", "拖拽视频到此或点击上传"):
+                    try:
+                        btn2 = await tab.find(btn_text, best_match=True, timeout=1)
+                        if btn2:
+                            await btn2.click()
+                            await tab.sleep(2)
+                            break
+                    except Exception:
+                        continue
+                if await _upload_file_via_cdp(tab, self.file_path):
+                    xiaohongshu_logger.info("[-] Step 1 完成: CDP 二次尝试成功")
+                    return True
+
                 if await _upload_file_via_native_dialog(tab, self.file_path):
                     return True
 
                 return False
 
             try:
-                ok = await asyncio.wait_for(_do_step1(), timeout=30.0)
+                ok = await asyncio.wait_for(_do_step1(), timeout=60.0)
             except asyncio.TimeoutError:
-                xiaohongshu_logger.error("[-] Step 1 超时（30s），请手动上传或检查页面")
+                xiaohongshu_logger.error("[-] Step 1 超时（60s），请手动上传或检查页面")
                 return False
             if not ok:
                 xiaohongshu_logger.error("[-] Step 1 失败: 未找到上传 input，请检查页面结构")
                 return False
+
+            # 关闭可能残留的系统文件选择对话框
+            try:
+                import pyautogui
+                for _ in range(2):
+                    pyautogui.press("escape")
+                    await asyncio.sleep(0.2)
+            except Exception:
+                pass
 
             async def _upload_done():
                 for txt in ("上传成功", "上传完成", "100%"):
@@ -484,14 +539,25 @@ class XiaohongshuVideo(object):
                 for label in ("社区公约", "遵守", "同意"):
                     chk = await tab.find(label, best_match=True, timeout=1)
                     if chk:
+                        xiaohongshu_logger.info(f"[-] 勾选「{label}」...")
                         await chk.click()
-                        await tab.sleep(0.3)
+                        await tab.sleep(0.5)
                         break
             except Exception:
                 pass
 
+            await tab.sleep(0.5)
+
             xiaohongshu_logger.info("[-] Step 5: 点击发布...")
-            pub_btn = await tab.find("发布", best_match=True, timeout=5)
+            pub_btn = None
+            for btn_text in ("立即发布", "发布"):
+                try:
+                    pub_btn = await tab.find(btn_text, best_match=True, timeout=3)
+                    if pub_btn:
+                        xiaohongshu_logger.info(f"[-] 找到发布按钮「{btn_text}」")
+                        break
+                except Exception:
+                    continue
             if pub_btn:
                 await pub_btn.click()
                 xiaohongshu_logger.info("[-] Step 5 完成: 已点击发布")
@@ -499,20 +565,39 @@ class XiaohongshuVideo(object):
                 xiaohongshu_logger.error("[-] Step 5 失败: 未找到发布按钮")
                 return False
 
+            await tab.sleep(3)
+
+            # 处理可能的二次确认弹窗（弹窗内按钮文案）
+            for confirm_text in ("确认发布", "确定发布", "确认", "确定"):
+                try:
+                    confirm_btn = await tab.find(confirm_text, best_match=True, timeout=1.5)
+                    if confirm_btn:
+                        xiaohongshu_logger.info(f"[-] 点击二次确认「{confirm_text}」...")
+                        await confirm_btn.click()
+                        await tab.sleep(3)
+                        break
+                except Exception:
+                    continue
+
             await tab.sleep(2)
 
-            for _ in range(60):
+            # 等待发布结果，最多 12 秒后退出（脚本结束后 PowerShell 会关闭浏览器）
+            for i in range(24):
                 await tab.sleep(0.5)
                 url = (tab.url or "").lower()
                 if "publish/success" in url or "note-manager" in url or "manage" in url:
                     xiaohongshu_logger.success("[-] 视频发布成功")
                     break
-                if await _has_text(tab, "发布成功", timeout=1):
+                if await _has_text(tab, "发布成功", timeout=0.8):
                     xiaohongshu_logger.success("[-] 视频发布成功")
                     break
-                xiaohongshu_logger.info("[-] 视频正在发布中...")
+                if await _has_text(tab, "审核中", timeout=0.5):
+                    xiaohongshu_logger.success("[-] 视频已提交审核")
+                    break
+                if i > 0 and i % 4 == 0:
+                    xiaohongshu_logger.info(f"[-] 等待发布结果... ({i // 2}s)")
             else:
-                xiaohongshu_logger.info("[-] Step 6: 发布流程已触发，请稍后到创作者中心确认")
+                xiaohongshu_logger.info("[-] 发布已提交，即将退出")
 
             if need_cookie_file(AUTH_MODE):
                 try:

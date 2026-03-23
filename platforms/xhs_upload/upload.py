@@ -20,7 +20,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 # Python 版本检查（nodriver 需 3.10+）
 if sys.version_info < (3, 10):
-    print("❌ 需要 Python 3.10 及以上，当前: %s" % sys.version.split()[0])
+    print("[X] 需要 Python 3.10 及以上，当前: %s" % sys.version.split()[0])
     sys.exit(1)
 
 

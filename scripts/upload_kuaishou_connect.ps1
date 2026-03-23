@@ -33,8 +33,8 @@ if (-not $listening) {
     Start-Sleep -Seconds 5
 }
 
-# 执行上传
-$env:AUTH_MODE = "connect"
+# 执行上传（使用 cookie 文件存储登录态）
+$env:AUTH_MODE = "cookie"
 $env:CDP_DEBUG_PORT = [string]$port
 $env:CDP_ENDPOINT = "http://127.0.0.1:$port"
 $env:PYTHONIOENCODING = "utf-8"

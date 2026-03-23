@@ -11,6 +11,22 @@ import os
 import asyncio
 import json
 
+# 修复 nodriver Cookie.from_json 在新版 Chrome 中缺少 sameParty 的 KeyError
+def _patch_nodriver_cookie():
+    try:
+        from nodriver.cdp import network
+        _orig_from_json = network.Cookie.from_json
+        @classmethod
+        def _patched(cls, json_dict):
+            d = dict(json_dict)
+            if "sameParty" not in d:
+                d["sameParty"] = False
+            return _orig_from_json.__func__(cls, d)
+        network.Cookie.from_json = _patched
+    except Exception:
+        pass
+_patch_nodriver_cookie()
+
 import nodriver as uc
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
 from shipinhao.browser import get_browser, try_connect_existing_chrome
@@ -293,11 +309,12 @@ async def cookie_auth(account_file: str, account_name: str = "default") -> tuple
 
 
 async def shipinhao_setup(account_file: str, handle: bool = False, account_name: str = "default"):
-    # 优先尝试复用已打开的 Chrome（需带 --remote-debugging-port=9222）
-    existing = await try_connect_existing_chrome()
-    if existing:
-        shipinhao_logger.info("[+] 已连接并复用已有浏览器")
-        return True, existing
+    # cookie 模式：不调用 try_connect，避免误关 Connect 脚本启动的 Chrome
+    if not need_cookie_file(AUTH_MODE):
+        existing = await try_connect_existing_chrome()
+        if existing:
+            shipinhao_logger.info("[+] 已连接并复用已有浏览器")
+            return True, existing
 
     if need_cookie_file(AUTH_MODE) and not os.path.exists(account_file):
         if not handle:
@@ -702,7 +719,7 @@ class ShipinhaoVideo(object):
 
             await tab.sleep(1)
 
-            for _ in range(40):
+            for i in range(24):
                 await tab.sleep(0.5)
                 url = (tab.url or "").lower()
                 if "success" in url or "list" in url or "content" in url:
@@ -711,9 +728,10 @@ class ShipinhaoVideo(object):
                 if await _has_text(tab, "发表成功", timeout=1) or await _has_text(tab, "发布成功", timeout=1):
                     shipinhao_logger.success("[-] 视频发表成功")
                     break
-                shipinhao_logger.info("[-] 视频正在发表中...")
+                if i > 0 and i % 4 == 0:
+                    shipinhao_logger.info(f"[-] 等待发表结果... ({i // 2}s)")
             else:
-                shipinhao_logger.info("[-] Step 6: 发表流程已触发，请稍后到视频号助手确认")
+                shipinhao_logger.info("[-] 发表已提交，即将退出")
 
             if need_cookie_file(AUTH_MODE):
                 try:

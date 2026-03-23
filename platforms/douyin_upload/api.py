@@ -71,7 +71,7 @@ def upload_to_douyin(
     video_path = str(Path(video_path).resolve())
 
     if not Path(video_path).exists():
-        print(f"❌ 视频文件不存在: {video_path}")
+        print(f"[X] 视频文件不存在: {video_path}")
         return False
 
     COOKIES_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,7 +80,7 @@ def upload_to_douyin(
     async def _do_upload() -> bool:
         ok, browser_tab = await douyin_setup(account_file, handle=handle_login, account_name=account_name)
         if not ok:
-            print("❌ 登录校验失败，请完成扫码登录后重试")
+            print("[X] 登录校验失败，请完成扫码登录后重试")
             return False
 
         # douyin_setup 可能返回 (True, browser) 或 (True, (browser, tab))
@@ -108,7 +108,7 @@ def upload_to_douyin(
     try:
         return asyncio.run(_do_upload())
     except Exception as e:
-        print(f"❌ 上传异常: {e}")
+        print(f"[X] 上传异常: {e}")
         return False
 
 

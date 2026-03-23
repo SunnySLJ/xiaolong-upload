@@ -3,13 +3,29 @@
 抖音创作者平台上传 - 纯 CDP（nodriver）
 
 登录授权模式（conf.AUTH_MODE）：
-  cookie  - 首次扫码后保存 cookie 到文件，后续从文件加载
+  cookie  - 从 cookie 文件加载登录态，无登录流程；支持 Connect 脚本 + CDP 连接
   connect - 连接已有 Chrome（须先运行 scripts/open_chrome_for_upload.sh）
-  profile - 固定用户目录，登录态保存（推荐）
+  profile - 固定用户目录，登录态保存
 """
 from datetime import datetime
 import os
 import asyncio
+
+# 修复 nodriver Cookie.from_json 在新版 Chrome 中缺少 sameParty 的 KeyError
+def _patch_nodriver_cookie():
+    try:
+        from nodriver.cdp import network
+        _orig_from_json = network.Cookie.from_json
+        @classmethod
+        def _patched(cls, json_dict):
+            d = dict(json_dict)
+            if "sameParty" not in d:
+                d["sameParty"] = False
+            return _orig_from_json.__func__(cls, d)
+        network.Cookie.from_json = _patched
+    except Exception:
+        pass
+_patch_nodriver_cookie()
 
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
 from douyin.browser import get_browser, try_connect_existing_chrome
@@ -85,12 +101,15 @@ async def douyin_setup(account_file: str, handle: bool = False, account_name: st
     """
     登录预备：若已登录返回 (True, browser)；若未登录且 handle=True 则引导扫码后返回 (True, browser)。
     返回的 browser 供上传复用，调用方负责在流程结束后停止。
+
+    cookie 模式：直接走 cookie_auth，不调用 try_connect_existing_chrome（避免误关 Connect 脚本启动的 Chrome）
     """
-    # 优先尝试连接已打开的 Chrome（需带 --remote-debugging-port=9222）
-    existing = await try_connect_existing_chrome()
-    if existing:
-        douyin_logger.info("[+] 已连接并复用已有浏览器")
-        return (True, existing)  # (browser, tab) 已在发布页
+    # connect/profile 模式：优先尝试连接已打开的 Chrome
+    if not need_cookie_file(AUTH_MODE):
+        existing = await try_connect_existing_chrome()
+        if existing:
+            douyin_logger.info("[+] 已连接并复用已有浏览器")
+            return (True, existing)  # (browser, tab) 已在发布页
 
     if need_cookie_file(AUTH_MODE) and not os.path.exists(account_file):
         if not handle:
@@ -351,32 +370,36 @@ class DouYinVideo(object):
             if self.publish_date != 0:
                 await self.set_schedule_time_douyin(tab, self.publish_date)
 
-            # 9. 点击发布，等待跳转到管理页
-            while True:
+            # 9. 点击发布，等待跳转到管理页（最多 12 秒后退出，脚本结束后 PowerShell 会关闭浏览器）
+            for i in range(40):
                 try:
-                    pub_btn = await tab.find("发布", best_match=True, timeout=5)
+                    pub_btn = await tab.find("发布", best_match=True, timeout=1 if i > 0 else 5)
                 except Exception:
                     pub_btn = None
                 if pub_btn:
                     await pub_btn.click()
                 await tab.sleep(0.3)
-                if "manage" in tab.url:
+                if "manage" in (tab.url or ""):
                     douyin_logger.success("[-] 视频发布成功")
                     publish_success = True
                     break
                 try:
-                    need_cover = await tab.find("请设置封面后再发布", best_match=True, timeout=1)
+                    need_cover = await tab.find("请设置封面后再发布", best_match=True, timeout=0.5)
                 except Exception:
                     need_cover = None
                 if need_cover:
                     await self.handle_auto_video_cover(tab)
-                else:
-                    douyin_logger.info("[-] 视频正在发布中...")
-                    douyin_logger.info("[-] 视频正在发布中...")
+                elif i > 0 and i % 8 == 0:
+                    douyin_logger.info(f"[-] 等待发布结果... ({i // 4}s)")
+            else:
+                douyin_logger.info("[-] 发布已提交，即将退出")
 
             if need_cookie_file(AUTH_MODE):
-                await browser.cookies.save(self.account_file)
-                douyin_logger.success("[-] cookie更新完毕！")
+                try:
+                    await asyncio.wait_for(browser.cookies.save(self.account_file), timeout=5.0)
+                    douyin_logger.success("[-] cookie更新完毕！")
+                except (asyncio.TimeoutError, Exception) as e:
+                    douyin_logger.warning(f"[-] 保存 cookie 跳过: {e}")
             await tab.sleep(1)
         finally:
             if publish_success:
