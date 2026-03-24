@@ -4,7 +4,7 @@
 
 根据 AUTH_MODE 支持三种模式：
   - cookie : 每次启动新 Chrome，通过 cookie 文件保存/加载登录态
-  - connect: 连接已打开的 Chrome（需先运行 open_chrome_for_upload.sh）
+  - connect: 连接已打开的 Chrome（需先启动带 remote-debugging-port 的 Chrome）
   - profile: 使用固定用户目录，登录态持久化（推荐）
 """
 import asyncio
@@ -76,9 +76,9 @@ async def get_browser(
             port = int(cdp_endpoint.rstrip("/").rsplit(":", 1)[-1])
         except (ValueError, IndexError):
             port = cdp_debug_port
-        config.port = port
-        config.host = "127.0.0.1"
-        browser = await uc.start(config)
+        # connect 模式的关键：只 attach 到已有浏览器，避免再拉起临时 Chrome
+        # 否则可能出现连接被抢占/端口断连（上传中 ConnectionRefused）。
+        browser = await uc.start(host="127.0.0.1", port=port)
         if return_reused:
             return browser, True
         return browser
@@ -92,6 +92,7 @@ async def get_browser(
 
         if try_reuse_chrome:
             try:
+                # 先尝试接管已存在的同端口调试浏览器，减少重复登录。
                 connect_config = Config(
                     headless=headless,
                     browser_executable_path=chrome_path,
@@ -110,6 +111,7 @@ async def get_browser(
             try:
                 import nodriver.core.util as _uc_util
                 _orig = _uc_util.free_port
+                # 复用失败时固定端口新开，保持平台行为可预测。
                 _uc_util.free_port = lambda: cdp_debug_port
                 try:
                     browser = await uc.start(config)

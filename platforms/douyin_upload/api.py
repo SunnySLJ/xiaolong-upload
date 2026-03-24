@@ -78,11 +78,13 @@ def upload_to_douyin(
     account_file = str(COOKIES_DIR / f"douyin_{account_name}.json")
 
     async def _do_upload() -> bool:
+        # 1) 先做登录态校验：已登录则复用浏览器；未登录时按 handle_login 决定是否引导扫码。
         ok, browser_tab = await douyin_setup(account_file, handle=handle_login, account_name=account_name)
         if not ok:
             print("[X] 登录校验失败，请完成扫码登录后重试")
             return False
 
+        # 2) 统一整理 browser/tab，后续上传流程优先复用现有发布页标签。
         # douyin_setup 可能返回 (True, browser) 或 (True, (browser, tab))
         if isinstance(browser_tab, tuple) and len(browser_tab) == 2:
             browser, existing_tab = browser_tab
@@ -102,6 +104,7 @@ def upload_to_douyin(
             productTitle=product_title,
             account_name=account_name,
         )
+        # 3) 进入上传主流程：上传文件 -> 填写标题文案话题 -> 发布。
         await app.upload(browser=browser, existing_tab=existing_tab)
         return True
 
@@ -115,11 +118,13 @@ def upload_to_douyin(
 if __name__ == "__main__":
     import sys
     if len(sys.argv) >= 3:
+        _tags_raw = sys.argv[4] if len(sys.argv) > 4 else ""
+        _tags = [t.strip() for t in _tags_raw.split(",") if t.strip()]
         upload_to_douyin(
             video_path=sys.argv[1],
             title=sys.argv[2],
             description=sys.argv[3] if len(sys.argv) > 3 else "",
-            tags=sys.argv[4].split(",") if len(sys.argv) > 4 else [],
+            tags=_tags,
         )
     else:
         upload_to_douyin(

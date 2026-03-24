@@ -28,7 +28,7 @@ $listening = netstat -ano 2>$null | Select-String "127.0.0.1:$port\s+.*LISTENING
 if (-not $listening) {
     Write-Host "启动带远程调试的 Chrome (端口 $port)..."
     New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
-    Start-Process -FilePath $chrome -ArgumentList "--remote-debugging-port=$port", "--user-data-dir=$profileDir", "https://cp.kuaishou.com/article/publish/video" -WindowStyle Normal
+    Start-Process -FilePath $chrome -ArgumentList "--remote-debugging-port=$port", "--user-data-dir=$profileDir", "--start-maximized", "https://cp.kuaishou.com/article/publish/video" -WindowStyle Maximized
     Write-Host "等待 Chrome 就绪..."
     Start-Sleep -Seconds 5
 }

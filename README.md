@@ -74,19 +74,18 @@ python scripts/upload_desktop.py -p kuaishou
 python scripts/upload_desktop.py -p xiaohongshu /path/to/video.mp4
 ```
 
-### 四平台顺序上传
+### 四平台顺序上传（抖音优先）
 
-按 抖音 → 小红书 → 快手 → 视频号 依次上传同一视频（标题/文案/标签自动生成）：
+按 抖音 → 小红书 → 快手 → 视频号 依次上传同一视频（固定文案模板）：
 
 ```bash
-python scripts/batch_upload_all.py ~/Desktop/3.mp4
+python scripts/upload_xhs_ks_sph_generated.py C:\Users\你\Desktop\2.mp4
 ```
 
-### 双击运行脚本（Mac / Windows）
+### 双击运行脚本（Windows）
 
 使用根目录 `.venv`，传入参数给 `upload.py`：
 
-- **Mac**：`scripts/run_upload_mac.command -p kuaishou /path/video.mp4 "标题" "文案" "标签"`
 - **Windows**：`scripts\run_upload.bat -p kuaishou 视频路径 "标题" "文案" "标签"`
 
 ### 各平台独立入口（可选）
@@ -96,14 +95,6 @@ cd platforms/douyin_upload && python upload_cli.py ...
 cd platforms/ks_upload     && python upload.py ...
 cd platforms/shipinhao_upload && python upload.py ...
 cd platforms/xhs_upload    && python upload.py ...
-```
-
-### 开发调试
-
-修改 `run_upload.py` 中参数后运行：
-
-```bash
-python run_upload.py --platform kuaishou
 ```
 
 ## 项目结构
@@ -116,22 +107,21 @@ longxia_upload/
 │   ├── ks_upload/
 │   ├── shipinhao_upload/
 │   └── xhs_upload/
-├── scripts/             # 通用脚本（run_upload、upload_desktop、open_chrome 等）
+├── scripts/             # 通用脚本（connect 上传、批量上传、Windows 启动器）
 ├── logs/                # 统一日志
 ├── cookies/             # 统一登录态（按平台分子目录）
 ├── upload.py            # 统一 CLI
-├── run_upload.py        # 调试入口
 └── requirements.txt
 ```
 
 详见 [STRUCTURE.md](STRUCTURE.md)。
-
-### Cookie 迁移
-
-若之前已有登录态，可运行 `scripts/migrate_cookies.sh` 将旧 cookies 迁到统一目录。
 
 ## 登录
 
 首次运行会打开 Chrome 扫码/验证登录，登录态保存在 `cookies/<平台>/` 目录。
 
 环境变量：`AUTH_MODE`（profile/connect/cookie）、`LOCAL_CHROME_PATH`、`CDP_DEBUG_PORT` 等。
+
+## 说明文档
+
+- 登录与上传流程（权威）：`docs/LOGIN_FLOW.md`

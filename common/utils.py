@@ -20,6 +20,23 @@ def need_cookie_file(auth_mode: str) -> bool:
     return auth_mode == "cookie"
 
 
+async def load_cookies_from_file(browser: Any, cookie_file: str) -> bool:
+    """从 JSON cookie 文件加载到浏览器。"""
+    if not cookie_file or not os.path.exists(cookie_file):
+        return False
+    await browser.cookies.load(cookie_file)
+    return True
+
+
+async def save_cookies_to_json(browser: Any, cookie_file: str) -> bool:
+    """将当前浏览器 cookie 保存到 JSON 文件。"""
+    if not cookie_file:
+        return False
+    os.makedirs(os.path.dirname(cookie_file), exist_ok=True)
+    await browser.cookies.save(cookie_file)
+    return True
+
+
 def extract_tags_from_description(desc: str, max_tags: int = 10) -> Tuple[str, List[str]]:
     """
     从文案中提取 #标签（如 OpenClaw 合并传入）。
