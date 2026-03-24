@@ -66,11 +66,10 @@ async def try_connect_existing_chrome(port: int = None) -> "tuple|None":
         tab = await browser.get(DOUYIN_UPLOAD_URL)
         await tab.sleep(2)
         if "creator-micro/content/upload" not in (tab.url or ""):
-            browser.stop()
+            # 勿 stop：会关掉用户本机已开的调试 Chrome，仅表示本次不接管
             return None
         try:
             if await tab.find("手机号登录", timeout=1) or await tab.find("扫码登录", timeout=1):
-                browser.stop()
                 return None
         except Exception:
             pass

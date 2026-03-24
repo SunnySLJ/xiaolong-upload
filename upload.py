@@ -96,6 +96,7 @@ def upload(
     :param account_name: 账号名
     :param handle_login: 未登录时是否打开浏览器
     """
+    # 入口层只做路由与参数清洗，登录/上传细节由平台模块负责。
     platform = platform.lower().strip()
     if platform not in _DISPATCH:
         print(f"❌ 未知平台: {platform}，可选: {', '.join(PLATFORMS)}")
@@ -104,6 +105,8 @@ def upload(
     tags = tags or []
     tags = [t.strip() for t in tags if t]
 
+    # 每个平台的 upload_to_xxx 会完成：
+    # 1) 登录态校验/引导登录 2) 打开发布页 3) 上传并发布
     return _DISPATCH[platform](
         video_path=video_path,
         title=title,
@@ -137,6 +140,7 @@ def _main():
     parser.add_argument("--no-login", action="store_true", help="未登录时不自动打开浏览器")
     args = parser.parse_args()
 
+    # CLI 入参统一在这里转成标准 tags 列表，避免平台侧重复解析。
     tags_list = [t.strip() for t in args.tags.split(",") if t.strip()]
 
     ok = upload(
