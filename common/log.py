@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Union
 
 from loguru import logger
+from common.console import ensure_console_ready
 
 _stdout_initialized = False
 
@@ -50,7 +51,6 @@ def setup_stdout():
     if _stdout_initialized:
         return
     _stdout_initialized = True
+    ensure_console_ready()
     logger.remove()
     logger.add(sys.stdout, colorize=True, format=_log_formatter)
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(line_buffering=True)

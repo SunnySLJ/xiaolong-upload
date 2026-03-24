@@ -20,8 +20,12 @@ for p in (_ROOT, _PROJECT_ROOT):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+from common.console import ensure_console_ready, safe_print
+
+ensure_console_ready()
+
 if sys.version_info < (3, 10):
-    print("❌ 需要 Python 3.10+")
+    safe_print("错误: 需要 Python 3.10+")
     sys.exit(1)
 
 from conf import COOKIES_DIR
@@ -54,7 +58,7 @@ def upload(
     video_path = str(Path(video_path).resolve())
 
     if not Path(video_path).exists():
-        print(f"❌ 视频不存在: {video_path}")
+        safe_print(f"错误: 视频不存在: {video_path}")
         return False
 
     COOKIES_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,14 +71,14 @@ def upload(
             )
         except Exception as e:
             import traceback
-            print(f"❌ 登录异常: {e}")
+            safe_print(f"错误: 登录异常: {e}")
             traceback.print_exc()
             return False
         if not ok:
-            print("❌ 请先用微信扫码登录")
+            safe_print("错误: 请先用微信扫码登录")
             return False
 
-        print("✅ 登录完成，开始上传...")
+        safe_print("登录完成，开始上传...")
         pub_date = publish_date if isinstance(publish_date, datetime) else 0
         app = ShipinhaoVideo(
             title=(title or "")[:64],
@@ -87,24 +91,24 @@ def upload(
         )
         try:
             if browser_tab:
-                await app.upload(
+                ok = await app.upload(
                     existing_browser=browser_tab[0],
                     existing_tab=browser_tab[1],
                 )
             else:
-                await app.upload()
+                ok = await app.upload()
         except Exception as e:
             import traceback
-            print(f"❌ 上传异常: {e}")
+            safe_print(f"错误: 上传异常: {e}")
             traceback.print_exc()
             return False
-        return True
+        return ok is True
 
     try:
         return asyncio.run(_do())
     except Exception as e:
         import traceback
-        print(f"❌ 异常: {e}")
+        safe_print(f"错误: 异常: {e}")
         traceback.print_exc()
         return False
 

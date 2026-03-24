@@ -19,8 +19,11 @@ for p in (_ROOT, _PLATFORM):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+from common.console import ensure_console_ready, safe_print
 from conf import COOKIES_DIR
 from kuaishou.main import kuaishou_setup, KuaishouVideo
+
+ensure_console_ready()
 
 
 def upload_to_kuaishou(
@@ -38,7 +41,7 @@ def upload_to_kuaishou(
     video_path = str(Path(video_path).resolve())
 
     if not Path(video_path).exists():
-        print(f"❌ 视频文件不存在: {video_path}")
+        safe_print(f"错误: 视频文件不存在: {video_path}")
         return False
 
     COOKIES_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,14 +52,14 @@ def upload_to_kuaishou(
             ok, browser_tab = await kuaishou_setup(account_file, handle=handle_login, account_name=account_name)
         except Exception as e:
             import traceback
-            print(f"❌ 登录/校验异常: {e}")
+            safe_print(f"错误: 登录/校验异常: {e}")
             traceback.print_exc()
             return False
         if not ok:
-            print("❌ 登录校验失败，请完成扫码/验证码登录后重试")
+            safe_print("错误: 登录校验失败，请完成扫码/验证码登录后重试")
             return False
 
-        print("✅ 登录完成，开始上传...")
+        safe_print("登录完成，开始上传...")
         pub_date = publish_date if isinstance(publish_date, datetime) else 0
         app = KuaishouVideo(
             title=title,
@@ -70,21 +73,21 @@ def upload_to_kuaishou(
         )
         try:
             if browser_tab:
-                await app.upload(existing_browser=browser_tab[0], existing_tab=browser_tab[1])
+                ok = await app.upload(existing_browser=browser_tab[0], existing_tab=browser_tab[1])
             else:
-                await app.upload()
+                ok = await app.upload()
         except Exception as e:
             import traceback
-            print(f"❌ 上传过程异常: {e}")
+            safe_print(f"错误: 上传过程异常: {e}")
             traceback.print_exc()
             return False
-        return True
+        return ok is True
 
     try:
         return asyncio.run(_do_upload())
     except Exception as e:
         import traceback
-        print(f"❌ 上传异常: {e}")
+        safe_print(f"错误: 上传异常: {e}")
         traceback.print_exc()
         return False
 
