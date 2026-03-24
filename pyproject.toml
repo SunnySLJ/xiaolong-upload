@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "longxia-upload"
+version = "0.1.0"
+description = "Unified multi-platform video upload CLI for Douyin, Kuaishou, Shipinhao, and Xiaohongshu."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "nodriver>=0.45",
+    "loguru",
+    "pyautogui",
+]
+
+[project.scripts]
+longxia-upload = "upload:_main"
+
+[tool.setuptools]
+py-modules = ["upload"]
+
+[tool.setuptools.packages.find]
+include = ["common*", "platforms*"]

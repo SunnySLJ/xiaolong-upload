@@ -22,10 +22,13 @@ _ROOT = _PROJECT_ROOT.parent.parent  # longxia_upload
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from common.console import ensure_console_ready, safe_print
 from common.utils import extract_tags_from_description
 
+ensure_console_ready()
+
 if sys.version_info < (3, 10):
-    print("❌ 需要 Python 3.10 及以上，当前: %s" % sys.version.split()[0])
+    safe_print("错误: 需要 Python 3.10 及以上，当前: %s" % sys.version.split()[0])
     sys.exit(1)
 
 

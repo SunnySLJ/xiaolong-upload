@@ -17,8 +17,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from common.console import ensure_console_ready, safe_print
+
+ensure_console_ready()
+
 if sys.version_info < (3, 10):
-    print("❌ 需要 Python 3.10+")
+    safe_print("错误: 需要 Python 3.10+")
     sys.exit(1)
 
 
@@ -99,7 +103,7 @@ def upload(
     # 入口层只做路由与参数清洗，登录/上传细节由平台模块负责。
     platform = platform.lower().strip()
     if platform not in _DISPATCH:
-        print(f"❌ 未知平台: {platform}，可选: {', '.join(PLATFORMS)}")
+        safe_print(f"错误: 未知平台: {platform}，可选: {', '.join(PLATFORMS)}")
         return False
 
     tags = tags or []

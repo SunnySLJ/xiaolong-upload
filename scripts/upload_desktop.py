@@ -12,8 +12,11 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from common.console import ensure_console_ready, safe_print
 from upload import upload
 from common.utils import gen_desktop_content
+
+ensure_console_ready()
 
 _PLATFORM_CONFIG = {
     "douyin": {"title_max": 30, "tags_max": 99, "default_tags": ["生活记录", "日常分享", "美好时光", "vlog"]},
@@ -32,7 +35,7 @@ def main():
 
     path = Path(args.video_path)
     if not path.exists():
-        print(f"❌ 视频不存在: {path}")
+        safe_print(f"错误: 视频不存在: {path}")
         sys.exit(1)
 
     cfg = _PLATFORM_CONFIG[args.platform]
@@ -45,11 +48,11 @@ def main():
     title = title[: cfg["title_max"]]
     tags = tags[: cfg["tags_max"]]
 
-    print("📝 生成内容:")
-    print(f"   标题: {title}")
-    print(f"   文案: {description}")
-    print(f"   标签: {', '.join(tags)}")
-    print()
+    safe_print("生成内容:")
+    safe_print(f"   标题: {title}")
+    safe_print(f"   文案: {description}")
+    safe_print(f"   标签: {', '.join(tags)}")
+    safe_print()
 
     ok = upload(
         platform=args.platform,
