@@ -10,11 +10,44 @@
 import asyncio
 import os
 import platform
+import json
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.request import urlopen
 
 import nodriver as uc
 from nodriver import Config
+
+async def _ensure_cdp_page_target(port: int) -> None:
+    """
+    某些环境下 /json 可能返回 0 个 page target，nodriver 连接后 browser.get 会 StopIteration。
+    这里在 connect 模式下确保至少存在一个 page target。
+    """
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/json", timeout=2) as resp:
+            targets = json.loads(resp.read().decode("utf-8"))
+        if isinstance(targets, list) and len(targets) > 0:
+            return
+    except Exception:
+        # 若 /json 不可用，直接跳过，不阻塞 connect
+        return
+
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/json/version", timeout=3) as resp:
+            v = json.loads(resp.read().decode("utf-8"))
+        ws_url = v.get("webSocketDebuggerUrl")
+        if not ws_url:
+            return
+        import websockets
+        async with websockets.connect(ws_url, open_timeout=3, close_timeout=3) as ws:
+            await ws.send(json.dumps({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}}))
+            # 等到 id=1 的返回即可
+            while True:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+                if msg.get("id") == 1:
+                    return
+    except Exception:
+        return
 
 def _default_chrome_path(chrome_path: Optional[str] = None) -> str:
     if chrome_path:
@@ -78,6 +111,7 @@ async def get_browser(
             port = cdp_debug_port
         # connect 模式的关键：只 attach 到已有浏览器，避免再拉起临时 Chrome
         # 否则可能出现连接被抢占/端口断连（上传中 ConnectionRefused）。
+        await _ensure_cdp_page_target(port)
         browser = await uc.start(host="127.0.0.1", port=port)
         if return_reused:
             return browser, True

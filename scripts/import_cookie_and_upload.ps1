@@ -1,15 +1,15 @@
 # Cookie import + upload (connect mode)
 # Usage:
-#   .\import_cookie_and_upload.ps1 -Platform douyin -CookieFile C:\path\dy.json -VideoPath C:\path\2.mp4 -Title "t" -Description "d" -Tags "a,b"
-#   .\import_cookie_and_upload.ps1 -Platform douyin -CookieFile C:\path\dy.json -ValidateOnly
+#   .\import_cookie_and_upload.ps1 -Platform douyin -VideoPath ... -Title ...   # 默认 cookies/dy.json（目录见 config\default_cookie_dir.txt）
+#   .\import_cookie_and_upload.ps1 -Platform douyin -CookieFile dy.json -ValidateOnly
+# CookieFile 省略时按平台使用 xhs.json / dy.json / ks.json / sph.json；亦可绝对路径或仅文件名。
 
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("douyin", "xiaohongshu", "kuaishou", "shipinhao")]
     [string]$Platform,
 
-    [Parameter(Mandatory = $true)]
-    [string]$CookieFile,
+    [string]$CookieFile = "",
 
     [string]$VideoPath = "",
     [string]$Title = "",
@@ -22,7 +22,15 @@ param(
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $scriptDir
 
-if (-not (Test-Path $CookieFile)) {
+. (Join-Path $scriptDir "cookie_path_utils.ps1")
+if ([string]::IsNullOrWhiteSpace($CookieFile)) {
+    $base = Get-LongxiaDefaultCookieDir -ProjectRoot $projectRoot
+    $CookieFile = Join-Path $base (Get-LongxiaPlatformCookieFileName -Platform $Platform)
+} else {
+    $CookieFile = Resolve-LongxiaCookiePath -ProjectRoot $projectRoot -CookieFile $CookieFile
+}
+
+if (-not (Test-Path -LiteralPath $CookieFile)) {
     Write-Host "Cookie file not found: $CookieFile"
     exit 1
 }
@@ -74,7 +82,7 @@ $env:PYTHONIOENCODING = "utf-8"
 
 Push-Location $projectRoot
 try {
-    $check = python "$scriptDir\import_cookie_to_connect.py" --platform $Platform --port $port --url $url --cookie-file $CookieFile
+    $check = python "$scriptDir\import_cookie_to_connect.py" --platform $Platform --port $port --url $url --cookie-file "$CookieFile"
     if ($LASTEXITCODE -ne 0) {
         Write-Host $check
         Write-Host "Cookie validation failed. Upload aborted."
