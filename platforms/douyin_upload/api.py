@@ -25,8 +25,11 @@ for p in (_ROOT, _PLATFORM):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+from common.console import ensure_console_ready, safe_print
 from conf import COOKIES_DIR
 from douyin.main import douyin_setup, DouYinVideo
+
+ensure_console_ready()
 
 
 def upload_to_douyin(
@@ -71,7 +74,7 @@ def upload_to_douyin(
     video_path = str(Path(video_path).resolve())
 
     if not Path(video_path).exists():
-        print(f"[X] 视频文件不存在: {video_path}")
+        safe_print(f"错误: 视频文件不存在: {video_path}")
         return False
 
     COOKIES_DIR.mkdir(parents=True, exist_ok=True)
@@ -81,7 +84,7 @@ def upload_to_douyin(
         # 1) 先做登录态校验：已登录则复用浏览器；未登录时按 handle_login 决定是否引导扫码。
         ok, browser_tab = await douyin_setup(account_file, handle=handle_login, account_name=account_name)
         if not ok:
-            print("[X] 登录校验失败，请完成扫码登录后重试")
+            safe_print("错误: 登录校验失败，请完成扫码登录后重试")
             return False
 
         # 2) 统一整理 browser/tab，后续上传流程优先复用现有发布页标签。
@@ -111,7 +114,7 @@ def upload_to_douyin(
     try:
         return asyncio.run(_do_upload())
     except Exception as e:
-        print(f"[X] 上传异常: {e}")
+        safe_print(f"错误: 上传异常: {e}")
         return False
 
 
