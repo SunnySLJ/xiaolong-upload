@@ -15,7 +15,7 @@ from upload import upload
 
 ensure_console_ready()
 
-PLATFORM_ORDER = ("douyin", "xiaohongshu", "kuaishou", "shipinhao")
+PLATFORM_ORDER = ("douyin", "xiaohongshu")
 
 PLATFORM_CONTENT = {
     "douyin": {
@@ -39,6 +39,10 @@ PLATFORM_CONTENT = {
         "tags": ["生活记录", "日常分享", "美好时光", "vlog", "小确幸", "随手拍"],
     },
 }
+
+# Disable entry exposure temporarily while keeping implementation intact.
+for _disabled_platform in ("kuaishou", "shipinhao"):
+    PLATFORM_CONTENT.pop(_disabled_platform, None)
 
 
 def _default_video_path() -> Path:
