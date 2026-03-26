@@ -2,6 +2,7 @@
 # Usage:
 #   .\export_shipinhao_cookie.ps1
 #   .\export_shipinhao_cookie.ps1 -OutputFile C:\path\sph_cookie.json
+# 未指定 -OutputFile 时写入默认 cookie 目录下的 sph.json
 
 param(
     [string]$OutputFile = ""
@@ -14,7 +15,10 @@ $port = 9226
 $url = "https://channels.weixin.qq.com/platform/post/create"
 
 if ([string]::IsNullOrWhiteSpace($OutputFile)) {
-    $OutputFile = Join-Path $projectRoot "cookies\shipinhao\cookie_exported.json"
+    . (Join-Path $scriptDir "cookie_path_utils.ps1")
+    $defaultDir = Get-LongxiaDefaultCookieDir -ProjectRoot $projectRoot
+    New-Item -ItemType Directory -Force -Path $defaultDir | Out-Null
+    $OutputFile = Join-Path $defaultDir "sph.json"
 }
 
 $chrome = $env:LOCAL_CHROME_PATH

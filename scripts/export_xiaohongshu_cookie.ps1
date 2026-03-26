@@ -2,6 +2,7 @@
 # Usage:
 #   .\export_xiaohongshu_cookie.ps1
 #   .\export_xiaohongshu_cookie.ps1 -OutputFile C:\path\xhs_cookie.json
+# 未指定 -OutputFile 时写入默认 cookie 目录下的 xhs.json
 
 param(
     [string]$OutputFile = ""
@@ -14,7 +15,10 @@ $port = 9223
 $url = "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=video"
 
 if ([string]::IsNullOrWhiteSpace($OutputFile)) {
-    $OutputFile = Join-Path $projectRoot "cookies\xiaohongshu\cookie_exported.json"
+    . (Join-Path $scriptDir "cookie_path_utils.ps1")
+    $defaultDir = Get-LongxiaDefaultCookieDir -ProjectRoot $projectRoot
+    New-Item -ItemType Directory -Force -Path $defaultDir | Out-Null
+    $OutputFile = Join-Path $defaultDir "xhs.json"
 }
 
 $chrome = $env:LOCAL_CHROME_PATH

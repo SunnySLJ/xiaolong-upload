@@ -2,6 +2,7 @@
 # Usage:
 #   .\export_douyin_cookie.ps1
 #   .\export_douyin_cookie.ps1 -OutputFile C:\path\douyin_cookie.json
+# 未指定 -OutputFile 时写入默认 cookie 目录下的 dy.json
 
 param(
     [string]$OutputFile = ""
@@ -14,7 +15,10 @@ $port = 9224
 $url = "https://creator.douyin.com/creator-micro/content/upload"
 
 if ([string]::IsNullOrWhiteSpace($OutputFile)) {
-    $OutputFile = Join-Path $projectRoot "cookies\douyin\cookie_exported.json"
+    . (Join-Path $scriptDir "cookie_path_utils.ps1")
+    $defaultDir = Get-LongxiaDefaultCookieDir -ProjectRoot $projectRoot
+    New-Item -ItemType Directory -Force -Path $defaultDir | Out-Null
+    $OutputFile = Join-Path $defaultDir "dy.json"
 }
 
 $chrome = $env:LOCAL_CHROME_PATH
@@ -37,7 +41,7 @@ if (-not $listening) {
 Push-Location $projectRoot
 try {
     $env:PYTHONIOENCODING = "utf-8"
-    python -u "$scriptDir\export_cookie_cdp_raw.py" --port $port --url $url --output $OutputFile --timeout 12
+    python -u "$scriptDir\export_cookie_cdp_raw.py" --port $port --output $OutputFile --timeout 12
     exit $LASTEXITCODE
 }
 finally {
