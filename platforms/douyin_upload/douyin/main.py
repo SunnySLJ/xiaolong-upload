@@ -4,7 +4,7 @@
 
 登录授权模式（conf.AUTH_MODE）：
   cookie  - 从 cookie 文件加载登录态，无登录流程；支持 Connect 脚本 + CDP 连接
-  connect - 连接已有 Chrome（须先运行 scripts/open_chrome_for_upload.sh）
+  connect - 连接已有 Chrome
   profile - 固定用户目录，登录态保存
 """
 from datetime import datetime
@@ -29,61 +29,33 @@ _patch_nodriver_cookie()
 
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
 from douyin.browser import get_browser, try_connect_existing_chrome
-from common.utils import need_cookie_file
+from common.utils import need_cookie_file, load_cookies_from_file, save_cookies_to_json
 from common.loggers import douyin_logger
 
-async def _send_login_notice(platform_name: str):
-    """发送微信登录通知"""
-    try:
-        shipinhao_logger.info(f"[+] 准备发送{platform_name}登录通知...")
-        
-        notice_text = f"""🔐 {platform_name}需要登录
-
-爽哥，{platform_name}登录失效了，请登录后继续上传。"""
-        
-        # 记录日志（OpenClaw 会捕获日志并通知）
-        shipinhao_logger.warning(f"[!] {platform_name}需要登录，请扫码：https://creator.douyin.com/")
-        shipinhao_logger.warning(notice_text)
-            
-    except Exception as e:
-        shipinhao_logger.debug(f"发送通知异常：{e}")
-
-
-
-# 发布成功时从 nodriver 的 atexit 清理列表中移除，避免脚本退出时被关闭
 try:
     from nodriver.core import util as _nodriver_util
 except ImportError:
     _nodriver_util = None
 
-
-# ==================== 工具函数 ====================
 from common.utils import has_text_in_page as _has_text
 
 
-# ==================== 登录与校验 ====================
-
 async def _check_logged_in(browser, account_file: str, account_name: str) -> bool:
-    """访问上传页，校验是否已登录抖音创作者中心"""
-    # cookie 模式：先加载已保存的 cookie
     if need_cookie_file(AUTH_MODE) and os.path.exists(account_file):
         try:
-            await browser.cookies.load(account_file)
+            await load_cookies_from_file(browser, account_file)
         except Exception:
             pass
 
     tab = await browser.get("https://creator.douyin.com/creator-micro/content/upload")
     await tab.sleep(2)
 
-    # 未进入上传页说明可能被重定向到登录
     if "creator.douyin.com/creator-micro/content/upload" not in tab.url:
         douyin_logger.info("[+] 未进入上传页，可能需重新登录")
         return False
 
-    # 页面上有登录入口说明未登录
     if await _has_text(tab, "手机号登录") or await _has_text(tab, "扫码登录"):
-        douyin_logger.info("[+] 检测到登录页，cookie/会话已失效")
-        await _send_login_notice("抖音")
+        douyin_logger.info("[+] 检测到登录页，cookie 已失效，请用 save_douyin_cookie.py 更新 cookie")
         return False
 
     douyin_logger.info("[+] 已登录")
@@ -91,14 +63,8 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> boo
 
 
 async def cookie_auth(account_file: str, account_name: str = "default", reuse_browser: bool = False):
-    """
-    校验登录态。返回 (是否已登录, 可复用的 browser 或 None)。
-    当 reuse_browser=True 且已登录时，不关闭浏览器，返回 (True, browser) 供后续复用。
-    """
     for try_reuse in (True, False):
-        res = await get_browser(
-            headless=LOCAL_CHROME_HEADLESS, account_name=account_name, try_reuse=try_reuse
-        )
+        res = await get_browser(headless=LOCAL_CHROME_HEADLESS, account_name=account_name, try_reuse=try_reuse)
         browser, was_reused = res if isinstance(res, tuple) else (res, False)
         try:
             ok = await _check_logged_in(browser, account_file, account_name)
@@ -117,128 +83,29 @@ async def cookie_auth(account_file: str, account_name: str = "default", reuse_br
 
 
 async def douyin_setup(account_file: str, handle: bool = False, account_name: str = "default"):
-    """
-    登录预备：若已登录返回 (True, browser)；若未登录且 handle=True 则引导扫码后返回 (True, browser)。
-    返回的 browser 供上传复用，调用方负责在流程结束后停止。
-
-    cookie 模式：直接走 cookie_auth，不调用 try_connect_existing_chrome（避免误关 Connect 脚本启动的 Chrome）
-    """
-    # connect/profile 模式：优先尝试连接已打开的 Chrome
     if not need_cookie_file(AUTH_MODE):
         existing = await try_connect_existing_chrome()
         if existing:
             douyin_logger.info("[+] 已连接并复用已有浏览器")
-            return (True, existing)  # (browser, tab) 已在发布页
+            return (True, existing)
 
     if need_cookie_file(AUTH_MODE) and not os.path.exists(account_file):
-        if not handle:
-            douyin_logger.info("[+] cookie 文件不存在，请先登录（handle=True）")
-            return (False, None)
-    else:
-        ok, browser = await cookie_auth(account_file, account_name, reuse_browser=True)
-        if ok and browser is not None:
-            return (True, browser)
-
-    if not handle:
+        douyin_logger.info("[+] cookie 文件不存在，请使用 save_douyin_cookie.py 保存 cookie")
+        douyin_logger.info("    用法: python save_douyin_cookie.py \"sessionid=xxx; sid_tt=yyy; ...\"")
         return (False, None)
 
-    douyin_logger.info("[+] 需要登录，即将打开浏览器...")
-    res = await douyin_cookie_gen(account_file, account_name)
-    # douyin_cookie_gen 返回 (browser, tab)，tab 已在发布页
-    if isinstance(res, tuple) and len(res) == 2:
-        return (True, res)
-    return (True, (res, None))  # 兼容旧返回值
+    ok, browser = await cookie_auth(account_file, account_name, reuse_browser=True)
+    if ok and browser is not None:
+        return (True, browser)
+    if not ok:
+        douyin_logger.info("[+] cookie 已失效，请重新获取 cookie 并用 save_douyin_cookie.py 保存")
+        return (False, None)
+    return (True, None)
 
-
-async def _is_login_page(tab) -> bool:
-    """检测当前 tab 是否在登录页（需扫码）"""
-    url = (tab.url or "").lower()
-    if "creator-micro/content/upload" in url:
-        return False
-    if "login" in url or "passport" in url:
-        return True
-    if await _has_text(tab, "手机号登录", timeout=1):
-        return True
-    if await _has_text(tab, "扫码登录", timeout=1):
-        return True
-    return False
-
-
-async def douyin_cookie_gen(account_file: str, account_name: str = "default"):
-    """打开浏览器，等待用户扫码登录，登录成功后自动检测并保存。返回 browser 供复用。"""
-    was_reused = False
-    for try_reuse in (True, False):
-        res = await get_browser(headless=False, account_name=account_name, try_reuse=try_reuse)
-        browser, was_reused = res if isinstance(res, tuple) else (res, False)
-        try:
-            tab = await browser.get("https://creator.douyin.com/")
-            break
-        except (StopIteration, RuntimeError) as e:
-            if try_reuse:
-                douyin_logger.warning(f"[-] 复用 Chrome 失败 ({e})，改用新浏览器")
-            else:
-                raise
-
-    await tab.sleep(2)
-    if AUTH_MODE == "connect":
-        douyin_logger.info("[+] 已连接你的 Chrome，请在浏览器中扫码登录抖音创作者中心")
-    else:
-        douyin_logger.info("[+] 请在浏览器中扫码登录，登录成功约 15 秒内会自动检测")
-
-    upload_url = "https://creator.douyin.com/creator-micro/content/upload"
-    poll_interval = 15
-    max_wait = 600
-    for elapsed in range(0, max_wait, poll_interval):
-        await tab.sleep(poll_interval)
-        try:
-            tab = await browser.get(upload_url)
-        except (StopIteration, RuntimeError):
-            continue
-        await tab.sleep(2)
-        if not await _is_login_page(tab):
-            douyin_logger.info("[+] 检测到已登录，正在保存...")
-            break
-        douyin_logger.info(f"[-] 等待登录中... ({elapsed + poll_interval}s)")
-    else:
-        douyin_logger.error("[-] 登录超时")
-        if not was_reused:
-            browser.stop()
-        raise TimeoutError("登录超时，请重试")
-
-    if need_cookie_file(AUTH_MODE):
-        try:
-            cookie_dir = os.path.dirname(account_file)
-            os.makedirs(cookie_dir, exist_ok=True)
-            douyin_logger.info("[-] 保存 cookie...")
-            await asyncio.wait_for(browser.cookies.save(account_file), timeout=5.0)
-            douyin_logger.info("[+] 登录信息已保存")
-        except (asyncio.TimeoutError, Exception) as e:
-            douyin_logger.warning(f"[-] 保存 cookie 跳过: {e}")
-    else:
-        douyin_logger.info("[+] 登录态已保存（profile/当前会话）")
-
-    douyin_logger.info("[+] 已在发布页，准备进入上传流程")
-    return (browser, tab)  # 返回已在发布页的 tab，避免 upload 时再次 get 丢失会话
-
-
-# ==================== 上传主逻辑 ====================
 
 class DouYinVideo(object):
-    """抖音视频上传任务封装"""
-
-    def __init__(
-        self,
-        title: str,
-        file_path: str,
-        tags: list,
-        publish_date: datetime,
-        account_file: str,
-        thumbnail_path=None,
-        productLink="",
-        productTitle="",
-        description: str = "",
-        account_name: str = "default",
-    ):
+    def __init__(self, title: str, file_path: str, tags: list, publish_date: datetime, account_file: str,
+                 thumbnail_path=None, productLink="", productTitle="", description: str = "", account_name: str = "default"):
         self.title = title
         self.file_path = file_path
         self.tags = tags
@@ -254,7 +121,6 @@ class DouYinVideo(object):
         self.productTitle = productTitle
 
     async def set_schedule_time_douyin(self, tab, publish_date: datetime):
-        """设置定时发布时间"""
         try:
             label = await tab.find("定时发布", best_match=True)
             if label:
@@ -270,26 +136,22 @@ class DouYinVideo(object):
             pass
 
     async def handle_upload_error(self, tab):
-        """视频上传失败时，点击重新上传"""
         douyin_logger.info("视频出错了，重新上传中")
         inp = await tab.select('div.progress-div input[type="file"]')
         if inp:
             await inp.send_file(self.file_path)
 
     async def upload(self, browser=None, existing_tab=None) -> None:
-        """执行完整上传流程。若传入 browser 则复用；若有 existing_tab（已在发布页）则直接用。"""
         own_browser = browser is None
         if existing_tab is not None and browser is not None:
             tab = existing_tab
         elif browser is None:
             for try_reuse in (True, False):
-                res = await get_browser(
-                    headless=self.headless, account_name=self.account_name, try_reuse=try_reuse
-                )
+                res = await get_browser(headless=self.headless, account_name=self.account_name, try_reuse=try_reuse)
                 browser, _ = res if isinstance(res, tuple) else (res, False)
                 if need_cookie_file(AUTH_MODE) and os.path.exists(self.account_file):
                     try:
-                        await browser.cookies.load(self.account_file)
+                        await load_cookies_from_file(browser, self.account_file)
                     except Exception:
                         pass
                 try:
@@ -301,7 +163,6 @@ class DouYinVideo(object):
                     else:
                         raise
         else:
-            # 有 browser 但无 existing_tab，需要导航到发布页
             tab = await browser.get("https://creator.douyin.com/creator-micro/content/upload")
         publish_success = False
         try:
@@ -313,10 +174,9 @@ class DouYinVideo(object):
                 douyin_logger.error("[+] 未进入上传页，请检查网络或 cookie")
                 return
             if await _has_text(tab, "手机号登录") or await _has_text(tab, "扫码登录"):
-                douyin_logger.error("[+] 未登录，请先运行并完成扫码登录")
+                douyin_logger.error("[+] 未登录，请用 save_douyin_cookie.py 保存 cookie 后重试")
                 return
 
-            # 1. 选择视频文件并上传
             upload_inp = await tab.select('div[class^="container"] input[type="file"]')
             if not upload_inp:
                 upload_inp = await tab.select('input[type="file"]')
@@ -326,7 +186,6 @@ class DouYinVideo(object):
                 douyin_logger.error("[-] 未找到上传按钮")
                 return
 
-            # 2. 等待进入发布页（URL 变化）
             for _ in range(60):
                 await tab.sleep(0.3)
                 if "publish" in tab.url or "post/video" in tab.url:
@@ -336,7 +195,6 @@ class DouYinVideo(object):
                 douyin_logger.error("[-] 超时未进入视频发布页面")
                 return
 
-            # 3. 等待视频转码/上传完成（出现「重新上传」表示完成）
             while True:
                 await tab.sleep(1)
                 if await tab.find("重新上传", best_match=True):
@@ -347,17 +205,14 @@ class DouYinVideo(object):
                 else:
                     douyin_logger.info("[-] 正在上传视频中...")
 
-            # 4. 可选：设置商品链接（带货）
             if self.productLink and self.productTitle:
                 douyin_logger.info("[-] 正在设置商品链接...")
                 await self.set_product_link(tab, self.productLink, self.productTitle)
                 douyin_logger.info("[+] 完成设置商品链接...")
 
-            # 5. 封面策略：自定义封面 or AI 自动选封面
             await self.apply_cover_strategy(tab)
             await self.clear_blocking_ui(tab)
 
-            # 6. 填充标题、文案、话题
             await tab.sleep(0.3)
             douyin_logger.info("[-] 正在填充标题和话题...")
 
@@ -377,7 +232,6 @@ class DouYinVideo(object):
                     await desc.send_keys("#" + tag + " ")
             douyin_logger.info(f"文案+话题已填充，共{len(self.tags)}个话题")
 
-            # 7. 可选：头条/西瓜同步开关
             try:
                 switch = await tab.select('[class^="info"] [class^="first-part"] div.semi-switch input', timeout=2)
                 if switch:
@@ -385,31 +239,21 @@ class DouYinVideo(object):
             except Exception:
                 pass
 
-            # 8. 可选：定时发布
             if self.publish_date != 0:
                 await self.set_schedule_time_douyin(tab, self.publish_date)
 
-            # 9. 点击发布，等待发布成功（最多 12 秒）
-            # 只点击一次发布按钮，避免重复点击
-            pub_btn_clicked = False
             for i in range(40):
-                # 只在第一次尝试点击发布按钮
-                if not pub_btn_clicked:
-                    try:
-                        pub_btn = await tab.find("发布", best_match=True, timeout=1 if i > 0 else 5)
-                        if pub_btn:
-                            await pub_btn.click()
-                            pub_btn_clicked = True
-                            douyin_logger.info("[-] 已点击发布按钮")
-                    except Exception:
-                        pass
+                try:
+                    pub_btn = await tab.find("发布", best_match=True, timeout=1 if i > 0 else 5)
+                except Exception:
+                    pub_btn = None
+                if pub_btn:
+                    await pub_btn.click()
                 await tab.sleep(0.3)
-                # 检查是否发布成功（URL 变化或出现成功提示）
                 if "manage" in (tab.url or ""):
                     douyin_logger.success("[-] 视频发布成功")
                     publish_success = True
                     break
-                # 检查是否需要设置封面
                 try:
                     need_cover = await tab.find("请设置封面后再发布", best_match=True, timeout=0.5)
                 except Exception:
@@ -423,25 +267,22 @@ class DouYinVideo(object):
 
             if need_cookie_file(AUTH_MODE):
                 try:
-                    await asyncio.wait_for(browser.cookies.save(self.account_file), timeout=5.0)
-                    douyin_logger.success("[-] cookie更新完毕！")
+                    ok = await asyncio.wait_for(save_cookies_to_json(browser, self.account_file), timeout=5.0)
+                    if ok:
+                        douyin_logger.success("[-] cookie更新完毕！")
                 except (asyncio.TimeoutError, Exception) as e:
                     douyin_logger.warning(f"[-] 保存 cookie 跳过: {e}")
             await tab.sleep(1)
         finally:
-            if publish_success:
-                # 从 nodriver atexit 注册表移除，避免脚本退出时 deconstruct_browser 关闭
-                if _nodriver_util:
-                    try:
-                        _nodriver_util.get_registered_instances().discard(browser)
-                    except Exception:
-                        pass
-            # 发布成功时不关闭浏览器；仅失败且为自建 browser 时清理
+            if publish_success and _nodriver_util:
+                try:
+                    _nodriver_util.get_registered_instances().discard(browser)
+                except Exception:
+                    pass
             if own_browser and not publish_success:
                 browser.stop()
 
     async def clear_blocking_ui(self, tab):
-        """关闭可能阻挡操作的加载遮罩"""
         try:
             wrap = await tab.select("div.dy-creator-content-modal-wrap", timeout=1)
             spin = await tab.select("div.dy-creator-content-portal .semi-spin", timeout=1)
@@ -451,7 +292,6 @@ class DouYinVideo(object):
             pass
 
     async def select_ai_cover_dialog(self, tab) -> bool:
-        """通过封面弹窗选择 AI 封面"""
         try:
             douyin_logger.info("[-] 选择封面弹窗...")
             sel = await tab.find("选择封面", best_match=True)
@@ -484,7 +324,6 @@ class DouYinVideo(object):
                     await done_btn.click()
                     douyin_logger.success("[+] 封面已确认")
                     await tab.sleep(0.5)
-                    # 点击完成后会弹出「是否确认应用此封面？」需点「确定」
                     await self._confirm_cover_apply_dialog(tab)
                     return True
             return False
@@ -493,7 +332,6 @@ class DouYinVideo(object):
             return False
 
     async def _confirm_cover_apply_dialog(self, tab):
-        """处理「是否确认应用此封面？」弹窗：点击「确定」确认封面"""
         for _ in range(5):
             try:
                 if await _has_text(tab, "是否确认应用此封面"):
@@ -503,7 +341,6 @@ class DouYinVideo(object):
                         douyin_logger.info("[-] 已确认应用封面")
                         await tab.sleep(0.3)
                         return True
-                # 若有「我知道了」小提示框，先关掉
                 got_it = await tab.find("我知道了", best_match=True, timeout=1)
                 if got_it:
                     await got_it.click()
@@ -517,7 +354,6 @@ class DouYinVideo(object):
         return False
 
     async def dismiss_optional_cover_dialogs(self, tab):
-        """关闭「暂不设置」等横版封面可选弹窗（仅此一步，避免过度关闭）"""
         try:
             btn = await tab.find("暂不设置", best_match=True, timeout=2)
             if btn:
@@ -530,32 +366,31 @@ class DouYinVideo(object):
         return False
 
     async def apply_cover_strategy(self, tab):
-        """封面策略：有自定义封面用自定义，否则走 AI 自动选封面"""
         if self.thumbnail_path and os.path.isfile(str(self.thumbnail_path)):
             await self.set_thumbnail(tab, str(self.thumbnail_path))
         else:
             await tab.sleep(1.5)
             if not await self.select_ai_cover_dialog(tab):
                 douyin_logger.info("[-] 封面未自动完成")
-        # 封面流程结束后：先处理「是否确认应用此封面？」，再执行一步关闭残留弹窗
         await self._confirm_cover_apply_dialog(tab)
         await self.dismiss_optional_cover_dialogs(tab)
 
     async def handle_auto_video_cover(self, tab):
-        """发布时若提示需设置封面，自动选一个封面并确定"""
-        if await tab.find("请设置封面后再发布", best_match=True):
-            cov = await tab.select('[class^="recommendCover-"]')
-            if cov:
-                await cov.click()
-                await tab.sleep(0.5)
-                confirm = await tab.find("确定", best_match=True)
-                if confirm:
-                    await confirm.click()
-                return True
+        try:
+            if await tab.find("请设置封面后再发布", best_match=True):
+                cov = await tab.select('[class^="recommendCover-"]')
+                if cov:
+                    await cov.click()
+                    await tab.sleep(0.5)
+                    confirm = await tab.find("确定", best_match=True)
+                    if confirm:
+                        await confirm.click()
+                    return True
+        except Exception:
+            pass
         return False
 
     async def set_thumbnail(self, tab, thumbnail_path: str):
-        """上传自定义封面图"""
         if not thumbnail_path:
             return
         douyin_logger.info("[-] 正在设置视频封面...")
@@ -580,7 +415,6 @@ class DouYinVideo(object):
         await self.dismiss_optional_cover_dialogs(tab)
 
     async def set_product_link(self, tab, product_link: str, product_title: str):
-        """设置商品链接（带货视频）"""
         await tab.sleep(1)
         try:
             dropdown = await tab.select(".semi-select")
@@ -610,5 +444,4 @@ class DouYinVideo(object):
             return False
 
     async def main(self, browser=None):
-        """对外入口，与 upload 一致"""
         await self.upload(browser=browser)

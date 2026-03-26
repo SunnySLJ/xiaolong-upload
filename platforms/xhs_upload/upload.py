@@ -17,10 +17,17 @@ from typing import List, Optional
 _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+_ROOT = _PROJECT_ROOT.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from common.console import ensure_console_ready, safe_print
+
+ensure_console_ready()
 
 # Python 版本检查（nodriver 需 3.10+）
 if sys.version_info < (3, 10):
-    print("[X] 需要 Python 3.10 及以上，当前: %s" % sys.version.split()[0])
+    safe_print("错误: 需要 Python 3.10 及以上，当前: %s" % sys.version.split()[0])
     sys.exit(1)
 
 
