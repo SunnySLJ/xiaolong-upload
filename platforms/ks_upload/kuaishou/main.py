@@ -31,6 +31,24 @@ from kuaishou.browser import get_browser
 from common.utils import need_cookie_file, has_text_in_page as _has_text
 from common.loggers import kuaishou_logger
 
+async def _send_login_notice(platform_name: str):
+    """发送微信登录通知"""
+    try:
+        kuaishou_logger.info(f"[+] 准备发送{platform_name}登录通知...")
+        
+        notice_text = f"""🔐 {platform_name}需要登录
+
+爽哥，{platform_name}登录失效了，请登录后继续上传。"""
+        
+        # 记录日志（OpenClaw 会捕获日志并通知）
+        kuaishou_logger.warning(f"[!] {platform_name}需要登录")
+        kuaishou_logger.warning(notice_text)
+            
+    except Exception as e:
+        kuaishou_logger.debug(f"发送通知异常：{e}")
+
+
+
 
 KS_UPLOAD_URL = "https://cp.kuaishou.com/article/publish/video"
 KS_HOME_URL = "https://cp.kuaishou.com/"
@@ -150,6 +168,7 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
     url_lower = (tab.url or "").lower()
     if "login" in url_lower or "passport" in url_lower:
         kuaishou_logger.info("[+] 检测到登录页，cookie/会话已失效")
+        await _send_login_notice("快手")
         return False, None, None
     if await _has_text(tab, "扫码登录") or await _has_text(tab, "短信登录") or await _has_text(tab, "发送验证码"):
         kuaishou_logger.info("[+] 检测到登录页，需要登录")
@@ -346,7 +365,7 @@ class KuaishouVideo(object):
                 t0 = time.perf_counter()
                 _step_log("Step 1: 查找上传 input...")
                 upload_inp = None
-                _t = 1.2
+                _t = 2.0  # 增加超时时间
                 for sel in UPLOAD_SELECTORS:
                     try:
                         all_inps = await tab.select_all(sel, timeout=_t, include_frames=True)

@@ -281,6 +281,7 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
         return False, None
     if await _has_text(tab, "微信扫码") or await _has_text(tab, "扫码登录") or await _has_text(tab, "请使用微信扫码"):
         shipinhao_logger.info("[+] 检测到登录页，需要微信扫码登录")
+        await _send_wechat_login_notice()
         return False, None
 
     shipinhao_logger.info("[+] 已登录")

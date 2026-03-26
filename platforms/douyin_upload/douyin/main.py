@@ -32,6 +32,24 @@ from douyin.browser import get_browser, try_connect_existing_chrome
 from common.utils import need_cookie_file
 from common.loggers import douyin_logger
 
+async def _send_login_notice(platform_name: str):
+    """发送微信登录通知"""
+    try:
+        shipinhao_logger.info(f"[+] 准备发送{platform_name}登录通知...")
+        
+        notice_text = f"""🔐 {platform_name}需要登录
+
+爽哥，{platform_name}登录失效了，请登录后继续上传。"""
+        
+        # 记录日志（OpenClaw 会捕获日志并通知）
+        shipinhao_logger.warning(f"[!] {platform_name}需要登录，请扫码：https://creator.douyin.com/")
+        shipinhao_logger.warning(notice_text)
+            
+    except Exception as e:
+        shipinhao_logger.debug(f"发送通知异常：{e}")
+
+
+
 # 发布成功时从 nodriver 的 atexit 清理列表中移除，避免脚本退出时被关闭
 try:
     from nodriver.core import util as _nodriver_util
@@ -65,6 +83,7 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> boo
     # 页面上有登录入口说明未登录
     if await _has_text(tab, "手机号登录") or await _has_text(tab, "扫码登录"):
         douyin_logger.info("[+] 检测到登录页，cookie/会话已失效")
+        await _send_login_notice("抖音")
         return False
 
     douyin_logger.info("[+] 已登录")
@@ -370,19 +389,27 @@ class DouYinVideo(object):
             if self.publish_date != 0:
                 await self.set_schedule_time_douyin(tab, self.publish_date)
 
-            # 9. 点击发布，等待跳转到管理页（最多 12 秒后退出，脚本结束后 PowerShell 会关闭浏览器）
+            # 9. 点击发布，等待发布成功（最多 12 秒）
+            # 只点击一次发布按钮，避免重复点击
+            pub_btn_clicked = False
             for i in range(40):
-                try:
-                    pub_btn = await tab.find("发布", best_match=True, timeout=1 if i > 0 else 5)
-                except Exception:
-                    pub_btn = None
-                if pub_btn:
-                    await pub_btn.click()
+                # 只在第一次尝试点击发布按钮
+                if not pub_btn_clicked:
+                    try:
+                        pub_btn = await tab.find("发布", best_match=True, timeout=1 if i > 0 else 5)
+                        if pub_btn:
+                            await pub_btn.click()
+                            pub_btn_clicked = True
+                            douyin_logger.info("[-] 已点击发布按钮")
+                    except Exception:
+                        pass
                 await tab.sleep(0.3)
+                # 检查是否发布成功（URL 变化或出现成功提示）
                 if "manage" in (tab.url or ""):
                     douyin_logger.success("[-] 视频发布成功")
                     publish_success = True
                     break
+                # 检查是否需要设置封面
                 try:
                     need_cover = await tab.find("请设置封面后再发布", best_match=True, timeout=0.5)
                 except Exception:

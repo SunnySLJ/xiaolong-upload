@@ -28,6 +28,24 @@ from xiaohongshu.browser import get_browser
 from common.utils import need_cookie_file
 from common.loggers import xiaohongshu_logger
 
+async def _send_login_notice(platform_name: str):
+    """发送微信登录通知"""
+    try:
+        xiaohongshu_logger.info(f"[+] 准备发送{platform_name}登录通知...")
+        
+        notice_text = f"""🔐 {platform_name}需要登录
+
+爽哥，{platform_name}登录失效了，请登录后继续上传。"""
+        
+        # 记录日志（OpenClaw 会捕获日志并通知）
+        xiaohongshu_logger.warning(f"[!] {platform_name}需要登录")
+        xiaohongshu_logger.warning(notice_text)
+            
+    except Exception as e:
+        xiaohongshu_logger.debug(f"发送通知异常：{e}")
+
+
+
 
 XHS_UPLOAD_URL = "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=video"
 XHS_TITLE_MAX = 20
@@ -98,6 +116,21 @@ async def _upload_file_via_cdp(tab, file_path: str) -> bool:
         xiaohongshu_logger.warning(f"[-] CDP 上传失败: {e}")
         return False
 
+
+async def _close_file_dialog(tab):
+    """关闭系统文件选择对话框（Mac）"""
+    try:
+        import pyautogui
+        xiaohongshu_logger.debug("[-] 尝试关闭文件选择对话框...")
+        for _ in range(3):
+            pyautogui.press("escape")
+            await asyncio.sleep(0.2)
+        # Mac 上尝试 Cmd+W 关闭窗口
+        pyautogui.hotkey("command", "w")
+        await asyncio.sleep(0.3)
+        xiaohongshu_logger.debug("[-] 文件选择对话框已关闭")
+    except Exception as e:
+        xiaohongshu_logger.debug(f"关闭对话框失败：{e}")
 
 async def _upload_file_via_native_dialog(tab, file_path: str) -> bool:
     """点击上传后通过系统文件选择器填入路径（Mac: Cmd+Shift+G）"""
@@ -185,6 +218,7 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
 
     if "login" in (tab.url or "") or "creator.xiaohongshu.com/login" in (tab.url or ""):
         xiaohongshu_logger.info("[+] 检测到登录页，cookie/会话已失效")
+        await _send_login_notice("小红书")
         return False, None
     if await _has_text(tab, "短信登录") or await _has_text(tab, "发送验证码") or await _has_text(tab, "扫码登录"):
         xiaohongshu_logger.info("[+] 检测到登录页，需要登录")
@@ -452,10 +486,16 @@ class XiaohongshuVideo(object):
             # 关闭可能残留的系统文件选择对话框
             try:
                 import pyautogui
-                for _ in range(2):
+                xiaohongshu_logger.info("[-] 尝试关闭文件选择对话框...")
+                for _ in range(3):
                     pyautogui.press("escape")
-                    await asyncio.sleep(0.2)
-            except Exception:
+                    await asyncio.sleep(0.3)
+                # Mac 上尝试 Cmd+W 关闭窗口
+                pyautogui.hotkey("command", "w")
+                await asyncio.sleep(0.3)
+                xiaohongshu_logger.info("[-] 文件选择对话框已关闭")
+            except Exception as e:
+                xiaohongshu_logger.debug(f"关闭对话框失败：{e}")
                 pass
 
             async def _upload_done():
