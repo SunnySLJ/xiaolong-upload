@@ -212,6 +212,33 @@ macOS 已验证可用解释器：
 7. 当前仓库已加规则：
    - 视频号一旦进入“需要登录”，会优先拉起固定的 `9226 + cookies/chrome_connect_sph` 专用 Chrome。
    - 因此后续扫码登录应优先沉淀到 `cookies/chrome_connect_sph`，而不是只留在 `cookies/shipinhao/sph_default`。
+8. 若用户反馈“OpenClaw 本地再跑视频号上传还是让我登录”，优先检查两件事：
+   - 是否错误探测了全局默认调试端口 `9222`，而不是视频号专用 `9226`
+   - 是否 `9226` 根本没有成功拉起，导致代码退回了旧的 profile 流程
+9. 当前已修复的代码行为：
+   - `try_connect_existing_chrome()` 固定优先探测 `9226`
+   - `shipinhao_setup()` 在走 profile 校验前，会先 `ensure_connect_login_chrome()` 并预检 `chrome_connect_sph`
+   - macOS 上拉起视频号专用 Chrome 改为 `open -na "Google Chrome" --args ...`，比直接起 Chrome 二进制更稳
+
+## 视频号复用失败专项排障
+
+适用场景：用户说“明明登录过了，但 OpenClaw 再跑视频号还是让我登录”。
+
+1. 先看 `logs/shipinhao.log` 最近 200 行。
+2. 若看到：
+   - `connect Chrome 启动超时，继续走默认登录流程`
+   - `检测到登录页，cookie/会话已失效`
+   说明不是单纯 cookie 没写入，而是专用 `9226` 会话没有被成功保活。
+3. 若看到：
+   - `已连接视频号专用 connect Chrome`
+   - `视频号 connect 目录已就绪`
+   但后续又要求登录，优先怀疑本轮执行没有复用 `9226`，而是退回到了旧 profile。
+4. 修复原则：
+   - 视频号永远优先复用 `9226 + cookies/chrome_connect_sph`
+   - 不能先做 profile 校验再决定是否 connect
+   - 不能复用全局默认调试端口 `9222`
+5. 成功判定：
+   - 不只是目录存在，还要看到日志里真正进入发表页或发布成功。
 
 ## 重传时的统一汇报格式
 
@@ -252,3 +279,21 @@ macOS 已验证可用解释器：
   - 用 `AUTH_MODE=connect` 重跑快手上传
 - 最终结果：
   - 日志在 `2026-03-27 10:55:07` 出现 `视频发布成功`
+
+## 本次已记录的视频号复用问题
+
+- 时间：`2026-03-27`
+- 现象：
+  - 用户已扫码登录并生成 `cookies/chrome_connect_sph`
+  - 但 OpenClaw 后续再次运行视频号上传时，仍提示重新登录
+- 真实故障链路：
+  - 视频号复用探测一度会误用全局默认端口 `9222`
+  - `9226` 会话未成功拉起时，代码会退回旧的 profile 校验
+  - profile 登录态失效后，就再次提示扫码
+- 修复方式：
+  - 视频号复用固定优先探测 `9226`
+  - `shipinhao_setup()` 先保活并预检 `9226 + chrome_connect_sph`
+  - macOS 上改用 `open -na "Google Chrome"` 拉起专用 connect Chrome
+- 排障结论：
+  - 只看到 `chrome_connect_sph` 目录存在，不代表 OpenClaw 本轮一定复用了它
+  - 必须同时确认 `9226` 在监听，且日志没有退回 profile 流程

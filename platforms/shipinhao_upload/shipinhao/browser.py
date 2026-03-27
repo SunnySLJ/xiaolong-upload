@@ -63,23 +63,36 @@ def _port_listening(port: int, host: str = "127.0.0.1") -> bool:
 
 def _launch_debug_chrome(port: int, url: str) -> None:
     SPH_CONNECT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    chrome = LOCAL_CHROME_PATH or None
-    args = [
-        chrome,
-        f"--remote-debugging-port={port}",
-        f"--user-data-dir={SPH_CONNECT_PROFILE_DIR}",
-        "--start-maximized",
-        url,
-    ]
     kwargs = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
     system = platform.system()
-    if system in ("Darwin", "Linux"):
+    if system == "Darwin":
+        args = [
+            "open",
+            "-na",
+            "Google Chrome",
+            "--args",
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={SPH_CONNECT_PROFILE_DIR}",
+            "--start-maximized",
+            url,
+        ]
         kwargs["start_new_session"] = True
-    elif system == "Windows":
-        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
+    else:
+        chrome = LOCAL_CHROME_PATH or None
+        args = [
+            chrome,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={SPH_CONNECT_PROFILE_DIR}",
+            "--start-maximized",
+            url,
+        ]
+        if system == "Linux":
+            kwargs["start_new_session"] = True
+        elif system == "Windows":
+            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
     subprocess.Popen(args, **kwargs)
 
 
@@ -128,7 +141,9 @@ async def try_connect_existing_chrome(port: int = None) -> "tuple|None":
     import nodriver as uc
     from nodriver import Config
 
-    port = port or CDP_DEBUG_PORT or SPH_CONNECT_PORT
+    # 视频号固定优先探测自己的 connect 端口 9226。
+    # 否则在未显式传 AUTH_MODE=connect 时，会错误落回全局默认 9222。
+    port = port or SPH_CONNECT_PORT
     try:
         config = Config(
             port=port,
