@@ -5,8 +5,7 @@
 
 param(
     [Parameter(Mandatory = $true)]
-    # "kuaishou" / "shipinhao" disabled temporarily at the entry layer
-    [ValidateSet("douyin", "xiaohongshu")]
+    [ValidateSet("douyin", "xiaohongshu", "kuaishou", "shipinhao")]
     [string]$Platform,
 
     [Parameter(Mandatory = $true)]

@@ -3,7 +3,7 @@
 """
 视频号自动化上传 - 统一入口
 
-命令行: python upload.py <视频路径> <标题> [文案] [标签1,标签2,...]
+命令行：python upload.py <视频路径> <标题> [文案] [标签 1，标签 2,...]
 API:    from upload import upload
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from common.console import ensure_console_ready, safe_print
 ensure_console_ready()
 
 if sys.version_info < (3, 10):
-    safe_print("错误: 需要 Python 3.10+")
+    safe_print("错误：需要 Python 3.10+")
     sys.exit(1)
 
 from conf import COOKIES_DIR
@@ -45,7 +45,7 @@ def upload(
     上传视频到视频号
 
     :param video_path: 视频文件路径
-    :param title: 标题（64字内，空则自动生成）
+    :param title: 标题（64 字内，空则自动生成）
     :param description: 文案（空则自动生成）
     :param tags: 话题标签，如 ["生活记录", "日常分享"]
     :param account_name: 账号名
@@ -58,7 +58,7 @@ def upload(
     video_path = str(Path(video_path).resolve())
 
     if not Path(video_path).exists():
-        safe_print(f"错误: 视频不存在: {video_path}")
+        safe_print(f"错误：视频不存在：{video_path}")
         return False
 
     COOKIES_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,16 +66,22 @@ def upload(
 
     async def _do() -> bool:
         try:
-            ok, browser_tab = await shipinhao_setup(
+            result = await shipinhao_setup(
                 account_file, handle=handle_login, account_name=account_name
             )
+            # 兼容新旧返回值：(ok, browser_tab) 或 (ok, browser_tab, screenshot_path)
+            ok = result[0] if isinstance(result, tuple) else result
+            browser_tab = result[1] if isinstance(result, tuple) and len(result) > 1 else None
+            screenshot_path = result[2] if isinstance(result, tuple) and len(result) > 2 else None
         except Exception as e:
             import traceback
-            safe_print(f"错误: 登录异常: {e}")
+            safe_print(f"错误：登录异常：{e}")
             traceback.print_exc()
             return False
         if not ok:
-            safe_print("错误: 请先用微信扫码登录")
+            safe_print("错误：请先用微信扫码登录")
+            if screenshot_path:
+                safe_print(f"[+] 登录二维码已保存：{screenshot_path}")
             return False
 
         safe_print("登录完成，开始上传...")
@@ -99,7 +105,7 @@ def upload(
                 ok = await app.upload()
         except Exception as e:
             import traceback
-            safe_print(f"错误: 上传异常: {e}")
+            safe_print(f"错误：上传异常：{e}")
             traceback.print_exc()
             return False
         return ok is True
@@ -108,7 +114,7 @@ def upload(
         return asyncio.run(_do())
     except Exception as e:
         import traceback
-        safe_print(f"错误: 异常: {e}")
+        safe_print(f"错误：异常：{e}")
         traceback.print_exc()
         return False
 
@@ -121,8 +127,8 @@ def _main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python upload.py /path/to/video.mp4 "标题" "文案" "标签1,标签2"
-  python upload.py video.mp4 "" "" "生活记录,日常,vlog"   # 空标题/文案则自动生成
+  python upload.py /path/to/video.mp4 "标题" "文案" "标签 1，标签 2"
+  python upload.py video.mp4 "" "" "生活记录，日常，vlog"   # 空标题/文案则自动生成
         """,
     )
     parser.add_argument("video_path", help="视频路径")

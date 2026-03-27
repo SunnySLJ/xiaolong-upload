@@ -683,6 +683,7 @@ class KuaishouVideo(object):
                 uc.util.get_registered_instances().discard(browser)
             except Exception:
                 pass
+            return True
         finally:
             pass  # 不关闭浏览器，脚本结束后用户可继续操作
 

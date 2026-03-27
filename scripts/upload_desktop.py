@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-一键上传桌面视频 - 支持抖音/小红书
+一键上传桌面视频 - 支持抖音/快手/小红书
 用法: python upload_desktop.py [--platform douyin] [视频路径]
 默认: 桌面 3.mp4, 自动生成标题/文案/标签
 """
@@ -24,11 +24,6 @@ _PLATFORM_CONFIG = {
     "shipinhao": {"title_max": 64, "tags_max": 10, "default_tags": ["生活记录", "日常分享", "美好时光", "vlog", "小确幸"]},
     "xiaohongshu": {"title_max": 20, "tags_max": 5, "default_tags": ["生活记录", "日常分享", "美好时光", "vlog", "小确幸"]},
 }
-
-# Disable entry exposure temporarily while keeping implementation intact.
-for _disabled_platform in ("kuaishou", "shipinhao"):
-    _PLATFORM_CONFIG.pop(_disabled_platform, None)
-
 
 def main():
     import argparse

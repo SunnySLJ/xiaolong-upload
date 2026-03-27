@@ -10,10 +10,16 @@ from datetime import datetime
 import os
 import asyncio
 import json
+from pathlib import Path
 
 import nodriver as uc
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
-from shipinhao.browser import get_browser, try_connect_existing_chrome
+from shipinhao.browser import (
+    get_browser,
+    try_connect_existing_chrome,
+    ensure_connect_login_chrome,
+    attach_login_chrome,
+)
 from common.utils import need_cookie_file, has_text_in_page as _has_text
 from common.loggers import shipinhao_logger
 
@@ -335,21 +341,41 @@ async def _is_login_page(tab) -> bool:
 
 
 async def shipinhao_cookie_gen(account_file: str, account_name: str = "default"):
-    was_reused = False
-    for try_reuse in (True, False):
-        res = await get_browser(headless=False, account_name=account_name, try_reuse=try_reuse)
-        browser, was_reused = res if isinstance(res, tuple) else (res, False)
+    connect_bootstrap_ok = ensure_connect_login_chrome()
+    if connect_bootstrap_ok:
         try:
-            tab = await browser.get(SPH_BASE_URL)
-            break
-        except (StopIteration, RuntimeError) as e:
-            if try_reuse:
-                shipinhao_logger.warning(f"[-] 复用 Chrome 失败 ({e})，改用新浏览器")
-            else:
-                raise
-    await tab.sleep(2)
+            browser, tab = await attach_login_chrome()
+            shipinhao_logger.info("[+] 已连接视频号专用 connect Chrome，请在该窗口用微信扫码登录")
+            await tab.sleep(2)
+            was_reused = True
+        except Exception as e:
+            shipinhao_logger.warning(f"[-] 连接专用 connect Chrome 失败 ({e})，改走默认登录流程")
+            browser = None
+            tab = None
+            was_reused = False
+    else:
+        browser = None
+        tab = None
+        was_reused = False
+
+    if browser is None or tab is None:
+        for try_reuse in (True, False):
+            res = await get_browser(headless=False, account_name=account_name, try_reuse=try_reuse)
+            browser, was_reused = res if isinstance(res, tuple) else (res, False)
+            try:
+                tab = await browser.get(SPH_BASE_URL)
+                break
+            except (StopIteration, RuntimeError) as e:
+                if try_reuse:
+                    shipinhao_logger.warning(f"[-] 复用 Chrome 失败 ({e})，改用新浏览器")
+                else:
+                    raise
+        await tab.sleep(2)
+
     if AUTH_MODE == "connect":
         shipinhao_logger.info("[+] 已连接你的 Chrome，请在浏览器中用微信扫码登录视频号助手")
+    elif connect_bootstrap_ok:
+        shipinhao_logger.info("[+] 登录会写入 cookies/chrome_connect_sph，后续可直接复用视频号 connect Chrome")
     else:
         shipinhao_logger.info("[+] 请用微信扫码登录视频号助手，登录成功约 15 秒内会自动跳转")
 
@@ -378,6 +404,10 @@ async def shipinhao_cookie_gen(account_file: str, account_name: str = "default")
             shipinhao_logger.info("[+] 登录信息已保存")
         except (asyncio.TimeoutError, Exception) as e:
             shipinhao_logger.warning(f"[-] 保存 cookie 跳过: {e}")
+
+    connect_profile_dir = Path(account_file).resolve().parent.parent / "chrome_connect_sph"
+    if connect_profile_dir.exists():
+        shipinhao_logger.info(f"[+] 视频号 connect 目录已就绪: {connect_profile_dir}")
 
     shipinhao_logger.info("[+] 已在发表页，准备进入上传流程")
     return browser, tab

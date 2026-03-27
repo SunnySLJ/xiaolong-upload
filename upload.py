@@ -6,7 +6,7 @@
 用法:
   python upload.py --platform <平台> <视频路径> [标题] [文案] [标签]
 
-平台: douyin | xiaohongshu
+平台: douyin | kuaishou | shipinhao | xiaohongshu
 """
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ if sys.version_info < (3, 10):
 
 PLATFORMS = (
     "douyin",
-    # "kuaishou",   # disabled temporarily
-    # "shipinhao",  # disabled temporarily
+    "kuaishou",
+    "shipinhao",
     "xiaohongshu",
 )
 
@@ -80,8 +80,8 @@ def _dispatch_xiaohongshu(video_path: str, title: str, description: str, tags: l
 
 _DISPATCH = {
     "douyin": _dispatch_douyin,
-    # "kuaishou": _dispatch_kuaishou,
-    # "shipinhao": _dispatch_shipinhao,
+    "kuaishou": _dispatch_kuaishou,
+    "shipinhao": _dispatch_shipinhao,
     "xiaohongshu": _dispatch_xiaohongshu,
 }
 
@@ -97,7 +97,7 @@ def upload(
 ) -> bool:
     """
     统一上传入口
-    :param platform: douyin | xiaohongshu
+    :param platform: douyin | kuaishou | shipinhao | xiaohongshu
     :param video_path: 视频路径
     :param title: 标题（视频号可空，自动生成）
     :param description: 文案
@@ -130,12 +130,13 @@ def _main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="龙虾上传 - 抖音/小红书 统一入口",
+        description="龙虾上传 - 四平台统一入口",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   python upload.py --platform douyin /path/video.mp4 "标题" "文案" "标签1,标签2"
   python upload.py --platform xiaohongshu video.mp4 "标题"
+  python upload.py --platform shipinhao video.mp4 "标题" "文案"
         """,
     )
     parser.add_argument("--platform", "-p", required=True, choices=PLATFORMS, help="目标平台")

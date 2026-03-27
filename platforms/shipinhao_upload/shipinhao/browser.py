@@ -3,6 +3,11 @@
 纯 CDP 模式：使用 nodriver 连接 Chrome
 委托 common.browser，支持复用已打开的 Chrome
 """
+import os
+import platform
+import socket
+import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -23,6 +28,8 @@ from common.browser import get_browser as _get_browser
 from common.loggers import shipinhao_logger
 
 SPH_UPLOAD_URL = "https://channels.weixin.qq.com/platform/post/create"
+SPH_CONNECT_PORT = 9226
+SPH_CONNECT_PROFILE_DIR = COOKIES_DIR.parent / "chrome_connect_sph"
 
 
 def _on_reuse():
@@ -48,12 +55,80 @@ async def get_browser(*, headless=None, account_name: str = "default", return_re
     )
 
 
+def _port_listening(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _launch_debug_chrome(port: int, url: str) -> None:
+    SPH_CONNECT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    chrome = LOCAL_CHROME_PATH or None
+    args = [
+        chrome,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={SPH_CONNECT_PROFILE_DIR}",
+        "--start-maximized",
+        url,
+    ]
+    kwargs = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    system = platform.system()
+    if system in ("Darwin", "Linux"):
+        kwargs["start_new_session"] = True
+    elif system == "Windows":
+        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
+    subprocess.Popen(args, **kwargs)
+
+
+def ensure_connect_login_chrome(port: int = SPH_CONNECT_PORT, url: str = SPH_UPLOAD_URL, timeout: float = 15.0) -> bool:
+    """确保视频号 connect 调试 Chrome 已启动，并固定落盘到 cookies/chrome_connect_sph。"""
+    if _port_listening(port):
+        SPH_CONNECT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        return True
+
+    try:
+        _launch_debug_chrome(port, url)
+    except Exception as e:
+        shipinhao_logger.warning(f"[-] 启动 connect Chrome 失败: {e}")
+        return False
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_listening(port):
+            shipinhao_logger.info(f"[+] 已启动 connect Chrome，目录: {SPH_CONNECT_PROFILE_DIR}")
+            return True
+        time.sleep(0.25)
+    shipinhao_logger.warning("[-] connect Chrome 启动超时，继续走默认登录流程")
+    return False
+
+
+async def attach_login_chrome(port: int = SPH_CONNECT_PORT):
+    """连接视频号专用调试 Chrome，不要求当前已登录。"""
+    import nodriver as uc
+    from nodriver import Config
+
+    config = Config(
+        port=port,
+        host="127.0.0.1",
+        headless=False,
+        browser_executable_path=LOCAL_CHROME_PATH or None,
+        sandbox=False,
+    )
+    browser = await uc.start(config)
+    tab = await browser.get(SPH_UPLOAD_URL)
+    await tab.sleep(2)
+    return browser, tab
+
+
 async def try_connect_existing_chrome(port: int = None) -> "tuple|None":
     """尝试连接已打开的 Chrome（带 --remote-debugging-port）。若已登录则返回 (browser, tab)。"""
     import nodriver as uc
     from nodriver import Config
 
-    port = port or CDP_DEBUG_PORT
+    port = port or CDP_DEBUG_PORT or SPH_CONNECT_PORT
     try:
         config = Config(
             port=port,
