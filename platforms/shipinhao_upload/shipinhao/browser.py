@@ -169,8 +169,11 @@ async def attach_login_chrome(port: int = SPH_CONNECT_PORT):
     browser = await uc.start(config)
     tab = _find_existing_upload_tab(browser, SPH_UPLOAD_URL)
     if tab is None:
-        _open_target_tab(port, SPH_UPLOAD_URL)
-        tab = await browser.get(SPH_UPLOAD_URL)
+        try:
+            tab = await browser.get(SPH_UPLOAD_URL)
+        except (StopIteration, RuntimeError):
+            _open_target_tab(port, SPH_UPLOAD_URL)
+            tab = await browser.get(SPH_UPLOAD_URL)
     await tab.sleep(2)
     return browser, tab
 
@@ -194,8 +197,11 @@ async def try_connect_existing_chrome(port: int = None) -> "tuple|None":
         browser = await uc.start(config)
         tab = _find_existing_upload_tab(browser, SPH_UPLOAD_URL)
         if tab is None:
-            _open_target_tab(port, SPH_UPLOAD_URL)
-            tab = await browser.get(SPH_UPLOAD_URL)
+            try:
+                tab = await browser.get(SPH_UPLOAD_URL)
+            except (StopIteration, RuntimeError):
+                _open_target_tab(port, SPH_UPLOAD_URL)
+                tab = await browser.get(SPH_UPLOAD_URL)
         await tab.sleep(2)
         url = (tab.url or "").lower()
         if "login" in url or "mp.weixin" in url:
