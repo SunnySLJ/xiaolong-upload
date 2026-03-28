@@ -10,6 +10,7 @@
 import asyncio
 import os
 import platform
+import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -33,6 +34,14 @@ def get_profile_dir(
     base = (chrome_user_data_dir or "").strip() or str(cookies_dir / "chrome_profile")
     name = f"{profile_prefix}_{account_name}" if profile_prefix else account_name
     return Path(base) / name
+
+
+def _cdp_endpoint_ready(port: int, timeout: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=timeout):
+            return True
+    except Exception:
+        return False
 
 
 async def get_browser(
@@ -71,16 +80,48 @@ async def get_browser(
     )
 
     if auth_mode == "connect":
-        try:
-            port = int(cdp_endpoint.rstrip("/").rsplit(":", 1)[-1])
-        except (ValueError, IndexError):
-            port = cdp_debug_port
+        # 优先使用 cdp_debug_port（平台专用端口），而不是 cdp_endpoint（全局默认 9222）
+        # 这样抖音/小红书/快手/视频号能各自使用正确的 9224/9223/9225/9226
+        port = cdp_debug_port
+        
+        # 先检查端口是否就绪，给一点时间等待
+        for retry in range(5):
+            if _cdp_endpoint_ready(port, timeout=1.0):
+                break
+            await asyncio.sleep(0.5)
+        else:
+            raise RuntimeError(f"CDP endpoint not ready after retries: 127.0.0.1:{port}")
+        
         # connect 模式的关键：只 attach 到已有浏览器，避免再拉起临时 Chrome
         # 否则可能出现连接被抢占/端口断连（上传中 ConnectionRefused）。
-        browser = await uc.start(host="127.0.0.1", port=port)
-        if return_reused:
-            return browser, True
-        return browser
+        # 修复：直接使用 host/port 参数，不使用 Config 对象
+        last_error = None
+        for attempt in range(3):
+            try:
+                # 方式 1: 直接用 host/port 参数（最稳定）
+                browser = await uc.start(host="127.0.0.1", port=port)
+                if return_reused:
+                    return browser, True
+                return browser
+            except Exception as e1:
+                last_error = e1
+                # 方式 2: 如果直接连接失败，尝试用 Config 方式
+                try:
+                    connect_config = Config(
+                        headless=False,
+                        browser_executable_path=chrome_path,
+                        sandbox=False,
+                        host="127.0.0.1",
+                        port=port,
+                    )
+                    browser = await uc.start(connect_config)
+                    if return_reused:
+                        return browser, True
+                    return browser
+                except Exception as e2:
+                    last_error = f"{e1}; {e2}"
+                    await asyncio.sleep(0.8)
+        raise RuntimeError(f"connect browser failed on port {port} after {3} attempts: {last_error}")
 
     if auth_mode == "profile":
         profile_path = get_profile_dir(

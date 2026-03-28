@@ -51,9 +51,11 @@ def upload_to_xiaohongshu(
         try:
             ok, browser_tab = await xiaohongshu_setup(account_file, handle=handle_login, account_name=account_name)
         except Exception as e:
-            import traceback
-            safe_print(f"错误: 登录/校验异常: {e}")
-            traceback.print_exc()
+            msg = str(e)
+            if "Failed to connect to browser" in msg or "CDP endpoint not ready" in msg:
+                safe_print("错误: 未连接上小红书登录浏览器，请先重新打开小红书专用登录会话后再试")
+            else:
+                safe_print(f"错误: 登录/校验异常: {e}")
             return False
         if not ok:
             safe_print("错误: 登录校验失败，请完成扫码/验证码登录后重试")

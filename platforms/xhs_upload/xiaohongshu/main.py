@@ -6,8 +6,10 @@ from datetime import datetime
 import os
 import asyncio
 import json
+import urllib.parse
+import urllib.request
 
-from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
+from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE, CDP_DEBUG_PORT
 from xiaohongshu.browser import get_browser
 from common.utils import need_cookie_file
 from common.loggers import xiaohongshu_logger
@@ -16,6 +18,55 @@ from common.loggers import xiaohongshu_logger
 XHS_UPLOAD_URL = "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=video"
 XHS_TITLE_MAX = 20
 XHS_TAGS_MAX = 5
+
+
+def _open_target_tab(url: str, port: int = CDP_DEBUG_PORT) -> bool:
+    encoded = urllib.parse.quote(url, safe=":/?&=%")
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/json/new?{encoded}",
+            method="PUT",
+            headers={"User-Agent": "xiaohongshu-upload"},
+        )
+        with urllib.request.urlopen(req, timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+def _find_existing_publish_tab(browser, url_hint: str = XHS_UPLOAD_URL):
+    hint = (url_hint or "").lower()
+    try:
+        tabs = getattr(browser, "tabs", None) or []
+        for tab in tabs:
+            try:
+                url = (getattr(tab, "url", None) or getattr(getattr(tab, "target", None), "url", None) or "").lower()
+                if "creator.xiaohongshu.com" in url and "publish" in url:
+                    return tab
+                if hint and url == hint:
+                    return tab
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+async def _browser_get_with_retry(browser, url: str, *, retries: int = 2, wait_seconds: float = 1.5):
+    last_error = None
+    existing = _find_existing_publish_tab(browser, url)
+    if existing is not None:
+        return existing
+    for attempt in range(retries + 1):
+        try:
+            return await browser.get(url)
+        except (StopIteration, RuntimeError) as e:
+            last_error = e
+            if "StopIteration" not in str(e) and "coroutine raised StopIteration" not in str(e):
+                raise
+            _open_target_tab(url)
+            await asyncio.sleep(wait_seconds)
+    raise RuntimeError(f"browser.get failed after retry: {last_error}")
 
 
 def _js_find_file_input():
@@ -156,7 +207,7 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
         except Exception:
             pass
 
-    tab = await browser.get(XHS_UPLOAD_URL)
+    tab = await _browser_get_with_retry(browser, XHS_UPLOAD_URL)
     await tab.sleep(2)
 
     if "login" in (tab.url or "") or "creator.xiaohongshu.com/login" in (tab.url or ""):
@@ -173,7 +224,14 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
 async def cookie_auth(account_file: str, account_name: str = "default") -> tuple[bool, object, object]:
     """返回 (是否已登录, browser, tab)。登录成功时返回可复用的 browser/tab"""
     for try_reuse in (True, False):
-        res = await get_browser(headless=LOCAL_CHROME_HEADLESS, account_name=account_name, try_reuse=try_reuse)
+        try:
+            res = await get_browser(headless=LOCAL_CHROME_HEADLESS, account_name=account_name, try_reuse=try_reuse)
+        except Exception as e:
+            if try_reuse:
+                xiaohongshu_logger.warning(f"[-] 连接浏览器失败 ({e})，改用下一种方式")
+                continue
+            xiaohongshu_logger.warning(f"[-] 连接浏览器失败 ({e})")
+            return False, None, None
         browser, was_reused = res if isinstance(res, tuple) else (res, False)
         try:
             ok, tab = await _check_logged_in(browser, account_file, account_name)
@@ -231,7 +289,7 @@ async def xiaohongshu_cookie_gen(account_file: str, account_name: str = "default
         res = await get_browser(headless=False, account_name=account_name, try_reuse=try_reuse)
         browser, was_reused = res if isinstance(res, tuple) else (res, False)
         try:
-            tab = await browser.get("https://creator.xiaohongshu.com/")
+            tab = await _browser_get_with_retry(browser, "https://creator.xiaohongshu.com/")
             break
         except (StopIteration, RuntimeError) as e:
             if try_reuse:
@@ -248,7 +306,7 @@ async def xiaohongshu_cookie_gen(account_file: str, account_name: str = "default
     max_wait = 600
     for elapsed in range(0, max_wait, poll_interval):
         await tab.sleep(poll_interval)
-        tab = await browser.get(XHS_UPLOAD_URL)
+        tab = await _browser_get_with_retry(browser, XHS_UPLOAD_URL)
         await tab.sleep(2)
         if not await _is_login_page(tab):
             xiaohongshu_logger.info("[+] 检测到已登录，正在保存...")
@@ -323,7 +381,7 @@ class XiaohongshuVideo(object):
                     except Exception:
                         pass
                 try:
-                    tab = await browser.get(XHS_UPLOAD_URL)
+                    tab = await _browser_get_with_retry(browser, XHS_UPLOAD_URL)
                     break
                 except (StopIteration, RuntimeError) as e:
                     if try_reuse:

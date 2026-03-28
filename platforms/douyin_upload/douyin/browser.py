@@ -5,6 +5,9 @@
 """
 import sys
 from pathlib import Path
+import asyncio
+import urllib.parse
+import urllib.request
 
 _ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_ROOT) not in sys.path:
@@ -27,6 +30,24 @@ DOUYIN_UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload"
 
 def _on_reuse():
     douyin_logger.info("[+] 复用已打开的 Chrome")
+
+
+def _find_existing_upload_tab(browser, url_hint: str = DOUYIN_UPLOAD_URL):
+    hint = (url_hint or "").lower()
+    try:
+        tabs = getattr(browser, "tabs", None) or []
+        for tab in tabs:
+            try:
+                url = (getattr(tab, "url", None) or getattr(getattr(tab, "target", None), "url", None) or "").lower()
+                if "creator.douyin.com" in url and "content/upload" in url:
+                    return tab
+                if hint and url == hint:
+                    return tab
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
 
 
 async def get_browser(*, headless=None, account_name: str = "default", return_reused: bool = True, try_reuse: bool = True):
@@ -54,6 +75,36 @@ async def try_connect_existing_chrome(port: int = None) -> "tuple|None":
     from nodriver import Config
 
     port = port or CDP_DEBUG_PORT
+
+    def _open_target_tab(url: str) -> bool:
+        encoded = urllib.parse.quote(url, safe=":/?&=%")
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/json/new?{encoded}",
+                method="PUT",
+                headers={"User-Agent": "douyin-connect"},
+            )
+            with urllib.request.urlopen(req, timeout=3):
+                return True
+        except Exception:
+            return False
+
+    async def _browser_get_with_retry(browser, url: str, retries: int = 2):
+        last_error = None
+        existing = _find_existing_upload_tab(browser, url)
+        if existing is not None:
+            return existing
+        for _ in range(retries + 1):
+            try:
+                return await browser.get(url)
+            except (StopIteration, RuntimeError) as e:
+                last_error = e
+                if "StopIteration" not in str(e) and "coroutine raised StopIteration" not in str(e):
+                    raise
+                _open_target_tab(url)
+                await asyncio.sleep(1.5)
+        raise RuntimeError(f"browser.get failed after retry: {last_error}")
+
     try:
         config = Config(
             port=port,
@@ -63,7 +114,7 @@ async def try_connect_existing_chrome(port: int = None) -> "tuple|None":
             sandbox=False,
         )
         browser = await uc.start(config)
-        tab = await browser.get(DOUYIN_UPLOAD_URL)
+        tab = await _browser_get_with_retry(browser, DOUYIN_UPLOAD_URL)
         await tab.sleep(2)
         if "creator-micro/content/upload" not in (tab.url or ""):
             # 勿 stop：会关掉用户本机已开的调试 Chrome，仅表示本次不接管

@@ -6,6 +6,7 @@
 
 - 单平台统一入口：`upload.py`
 - 四平台顺序入口（抖音优先）：`scripts/upload_xhs_ks_sph_generated.py`
+- 四平台登录助手：`scripts/platform_login.py`
 - 平台 connect 脚本：
   - `scripts/upload_douyin_connect.ps1`
   - `scripts/upload_xiaohongshu_connect.ps1`
@@ -28,6 +29,7 @@ xiaolong-upload/
 │   ├── upload_xiaohongshu_connect.ps1
 │   ├── upload_kuaishou_connect.ps1
 │   ├── upload_shipinhao_connect.ps1
+│   ├── platform_login.py
 │   ├── upload_desktop.py
 │   ├── open_chrome_for_upload.ps1
 │   └── run_upload.bat
@@ -72,6 +74,80 @@ xiaolong-upload/
    - 成功后延时关闭（默认 10 秒）
    - 失败时可保留浏览器用于排查
 
+## 5.1 统一发布接口（对外暴露）
+
+登录完成后的发布只允许走一个统一入口：
+
+- CLI：`python upload.py --platform <platform> <video_path> [title] [description] [tags]`
+- Python：`from upload import upload`
+
+平台内部实际映射：
+
+- 抖音：`platforms.douyin_upload.api.upload_to_douyin`
+- 小红书：`platforms.xhs_upload.upload.upload`
+- 快手：`platforms.ks_upload.upload.upload`
+- 视频号：`platforms.shipinhao_upload.api.upload_to_shipinhao`
+
+调用方、skill、外部项目都不直接拼平台内部模块，统一走 `upload.py`。
+
+详细要求见：
+
+- `docs/PUBLISH_REQUIREMENTS.md`
+
+## 5.2 登录前置规则（必须遵守）
+
+1. 四个平台的登录信息都会过期，不能假设“上次登录过，这次也一定能发”。
+2. 在真正上传视频前，必须先检查该平台当前是否还能复用登录态。
+3. 若登录不可复用：
+   - 先明确提醒用户该平台需要重新登录。
+   - 指向 `scripts/platform_login.py --platform <platform>` 或平台专用 connect 登录流程。
+4. 批量上传时，若某个平台当前登录不可复用：
+   - 跳过该平台，不阻塞其他平台继续上传。
+   - 汇报里必须明确标为“跳过（需先登录）”。
+5. 单平台上传时，若用户未要求立刻人工登录，先回传“需要登录”而不是假装已开始发布。
+
+登录检查示例：
+
+```bash
+python scripts/platform_login.py --platform douyin --check-only
+python scripts/platform_login.py --platform xiaohongshu --check-only
+python scripts/platform_login.py --platform kuaishou --check-only
+python scripts/platform_login.py --platform shipinhao --check-only
+```
+
+若需要打开专用登录窗口并等待用户完成登录：
+
+```bash
+python scripts/platform_login.py --platform shipinhao
+```
+
+若用户无法连接桌面电脑，可由脚本生成二维码截图，再交给 OpenClaw 发到微信，并等待登录完成：
+
+```bash
+python scripts/platform_login.py --platform kuaishou --notify-wechat
+```
+
+说明：
+
+- 二维码/截图由登录脚本生成
+- 发送到微信这一步由 OpenClaw 执行
+- 登录是否完成仍以浏览器页面检测结果为准
+
+## 5.3 登录后确认再发布（必须遵守）
+
+1. `auth` 只负责登录，不因“登录成功”自动触发发布。
+2. 若用户要求“登录之后还是需要确认发布”，则登录成功后必须停在“已登录、可发布”状态。
+3. 只有在用户明确说“继续发布/现在发布”后，才调用统一发布接口：
+
+```bash
+python upload.py --platform <platform> <video_path> <title> <description> <tags>
+```
+
+4. 登录成功后的标准回传口径应为：
+   - 平台已登录
+   - 登录信息已写入对应 `cookies/chrome_connect_*`
+   - 当前尚未开始发布，等待用户确认
+
 ## 6. 各平台对比
 
 | 项目 | 抖音 | 小红书 | 快手 | 视频号 |
@@ -99,6 +175,9 @@ xiaolong-upload/
 
 5. 编码统一 UTF-8  
    - connect 脚本统一设置 `PYTHONIOENCODING=utf-8`，降低中文参数编码问题。
+6. 上传前必须做登录检查  
+   - 批量入口 `scripts/upload_all_platforms.py` 已接入登录前置检查；登录不可复用时会提醒并跳过该平台。
+   - Windows 串行脚本 `scripts/upload_xhs_ks_sph_generated.py` 也已接入同样逻辑；登录不可复用时会提醒并跳过该平台。
 
 ## 8. 发布页 URL
 
@@ -160,3 +239,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/export_douyin_cookie
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/import_cookie_and_upload.ps1 -Platform douyin -CookieFile "C:\Users\你\Desktop\shuang\xiaolong-upload\cookies\douyin\cookie_exported.json" -ValidateOnly
 ```
+
+## 11. 给其他项目复用的登录脚本
+
+`scripts/platform_login.py` 是刻意做成单文件、可复制的登录脚本。
+
+用途：
+
+1. 独立检查某个平台当前登录是否还能复用。
+2. 若不能复用，自动打开该平台专用 connect Chrome 并等待用户完成登录。
+3. 其他项目后续只要复用同一套 `cookies/chrome_connect_*` 目录和端口，就可以直接拿这份登录信息去上传。
+
+当前四个平台固定映射：
+
+- 抖音：`9224` + `cookies/chrome_connect_dy`
+- 小红书：`9223` + `cookies/chrome_connect_xhs`
+- 快手：`9225` + `cookies/chrome_connect_ks`
+- 视频号：`9226` + `cookies/chrome_connect_sph`
+
+建议其他项目接入规则：
+
+1. 上传前先调用 `python platform_login.py --platform <platform> --check-only`
+2. 返回非 0 时，不直接上传，先让用户登录
+3. 登录完成后再进入上传流程
+4. 若是批量任务，该平台登录失败就跳过，不拖死整批任务

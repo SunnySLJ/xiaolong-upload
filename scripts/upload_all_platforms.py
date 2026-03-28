@@ -7,11 +7,15 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
 
 from common.console import ensure_console_ready, safe_print
 from upload import upload
+from platform_login import check_platform_login, login_instruction
 
 ensure_console_ready()
 
@@ -75,13 +79,22 @@ def main() -> int:
     safe_print(f"即将按顺序上传到: {' -> '.join(platforms)}")
     safe_print()
 
-    results: list[tuple[str, bool]] = []
+    results: list[tuple[str, str]] = []
     for platform in platforms:
         content = PLATFORM_CONTENT[platform]
         safe_print(f"========== [{platform}] ==========")
         safe_print(f"标题: {content['title']}")
         safe_print(f"文案: {content['description']}")
         safe_print(f"标签: {', '.join(content['tags'])}")
+
+        login_ok, login_msg = check_platform_login(platform, _ROOT)
+        safe_print(f"登录检查: {login_msg}")
+        if not login_ok:
+            safe_print(login_instruction(platform, _ROOT))
+            safe_print("结果: 跳过（需先登录）")
+            results.append((platform, "skipped_login"))
+            safe_print()
+            continue
 
         ok = upload(
             platform=platform,
@@ -90,14 +103,19 @@ def main() -> int:
             description=content["description"],
             tags=content["tags"],
         )
-        results.append((platform, ok))
+        results.append((platform, "success" if ok else "failed"))
         safe_print(f"结果: {'成功' if ok else '失败'}")
         safe_print()
 
-    failed = [platform for platform, ok in results if not ok]
+    failed = [platform for platform, status in results if status == "failed"]
     safe_print("========== [summary] ==========")
-    for platform, ok in results:
-        safe_print(f"{platform}: {'成功' if ok else '失败'}")
+    for platform, status in results:
+        if status == "success":
+            safe_print(f"{platform}: 成功")
+        elif status == "skipped_login":
+            safe_print(f"{platform}: 跳过（需先登录）")
+        else:
+            safe_print(f"{platform}: 失败")
 
     return 0 if not failed else 1
 

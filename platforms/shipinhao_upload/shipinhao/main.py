@@ -10,6 +10,8 @@ from datetime import datetime
 import os
 import asyncio
 import json
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import nodriver as uc
@@ -30,6 +32,20 @@ SPH_BASE_URL = "https://channels.weixin.qq.com"
 # 视频号标题建议简短，描述可达 1000 字
 SPH_TITLE_MAX = 64
 SPH_TAGS_MAX = 10
+
+
+def _open_target_tab(url: str, port: int = 9226) -> bool:
+    encoded = urllib.parse.quote(url, safe=":/?&=%")
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/json/new?{encoded}",
+            method="PUT",
+            headers={"User-Agent": "shipinhao-upload"},
+        )
+        with urllib.request.urlopen(req, timeout=3):
+            return True
+    except Exception:
+        return False
 
 
 def _js_find_file_input():
@@ -238,6 +254,7 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
         except (StopIteration, RuntimeError) as e:
             if retry == 0:
                 shipinhao_logger.warning(f"[-] browser.get() 失败，重试：{e}")
+                _open_target_tab(SPH_UPLOAD_URL)
                 await asyncio.sleep(1)
             else:
                 shipinhao_logger.error("[-] browser.get() 重试失败")
@@ -366,6 +383,7 @@ async def shipinhao_cookie_gen(account_file: str, account_name: str = "default")
                 break
             except (StopIteration, RuntimeError):
                 if retry == 0:
+                    _open_target_tab(SPH_UPLOAD_URL)
                     await asyncio.sleep(1)
         await tab.sleep(2)
         if not await _is_login_page(tab):

@@ -14,8 +14,8 @@ from common.conf import (
 
 # 视频号固定使用 connect 模式，登录态保存在 chrome_connect_sph/
 AUTH_MODE = "connect"
-CDP_ENDPOINT = "http://127.0.0.1:9225"
-CDP_DEBUG_PORT = 9225
+CDP_ENDPOINT = "http://127.0.0.1:9226"
+CDP_DEBUG_PORT = 9226
 
 PROJECT_ROOT = _ROOT
 BASE_DIR = Path(__file__).resolve().parent

@@ -9,6 +9,8 @@ import socket
 import subprocess
 import time
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -34,6 +36,38 @@ SPH_CONNECT_PROFILE_DIR = COOKIES_DIR.parent / "chrome_connect_sph"
 
 def _on_reuse():
     shipinhao_logger.info("[+] 复用已打开的 Chrome")
+
+
+def _find_existing_upload_tab(browser, url_hint: str = SPH_UPLOAD_URL):
+    hint = (url_hint or "").lower()
+    try:
+        tabs = getattr(browser, "tabs", None) or []
+        for tab in tabs:
+            try:
+                url = (getattr(tab, "url", None) or getattr(getattr(tab, "target", None), "url", None) or "").lower()
+                if "channels.weixin.qq.com" in url and "platform/post/create" in url:
+                    return tab
+                if hint and url == hint:
+                    return tab
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _open_target_tab(port: int, url: str) -> bool:
+    encoded = urllib.parse.quote(url, safe=":/?&=%")
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/json/new?{encoded}",
+            method="PUT",
+            headers={"User-Agent": "shipinhao-connect"},
+        )
+        with urllib.request.urlopen(req, timeout=3):
+            return True
+    except Exception:
+        return False
 
 
 async def get_browser(*, headless=None, account_name: str = "default", return_reused: bool = True, try_reuse: bool = True):
@@ -75,6 +109,7 @@ def _launch_debug_chrome(port: int, url: str) -> None:
             "Google Chrome",
             "--args",
             f"--remote-debugging-port={port}",
+            "--remote-allow-origins=*",
             f"--user-data-dir={SPH_CONNECT_PROFILE_DIR}",
             "--start-maximized",
             url,
@@ -85,6 +120,7 @@ def _launch_debug_chrome(port: int, url: str) -> None:
         args = [
             chrome,
             f"--remote-debugging-port={port}",
+            "--remote-allow-origins=*",
             f"--user-data-dir={SPH_CONNECT_PROFILE_DIR}",
             "--start-maximized",
             url,
@@ -131,7 +167,10 @@ async def attach_login_chrome(port: int = SPH_CONNECT_PORT):
         sandbox=False,
     )
     browser = await uc.start(config)
-    tab = await browser.get(SPH_UPLOAD_URL)
+    tab = _find_existing_upload_tab(browser, SPH_UPLOAD_URL)
+    if tab is None:
+        _open_target_tab(port, SPH_UPLOAD_URL)
+        tab = await browser.get(SPH_UPLOAD_URL)
     await tab.sleep(2)
     return browser, tab
 
@@ -153,7 +192,10 @@ async def try_connect_existing_chrome(port: int = None) -> "tuple|None":
             sandbox=False,
         )
         browser = await uc.start(config)
-        tab = await browser.get(SPH_UPLOAD_URL)
+        tab = _find_existing_upload_tab(browser, SPH_UPLOAD_URL)
+        if tab is None:
+            _open_target_tab(port, SPH_UPLOAD_URL)
+            tab = await browser.get(SPH_UPLOAD_URL)
         await tab.sleep(2)
         url = (tab.url or "").lower()
         if "login" in url or "mp.weixin" in url:

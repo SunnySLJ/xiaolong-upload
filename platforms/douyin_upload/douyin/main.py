@@ -10,6 +10,8 @@
 from datetime import datetime
 import os
 import asyncio
+import urllib.parse
+import urllib.request
 
 # 修复 nodriver Cookie.from_json 在新版 Chrome 中缺少 sameParty 的 KeyError
 def _patch_nodriver_cookie():
@@ -27,8 +29,8 @@ def _patch_nodriver_cookie():
         pass
 _patch_nodriver_cookie()
 
-from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE
-from douyin.browser import get_browser, try_connect_existing_chrome
+from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE, CDP_DEBUG_PORT
+from douyin.browser import DOUYIN_UPLOAD_URL, get_browser, try_connect_existing_chrome
 from common.utils import need_cookie_file, load_cookies_from_file, save_cookies_to_json
 from common.loggers import douyin_logger
 
@@ -40,6 +42,55 @@ except ImportError:
 from common.utils import has_text_in_page as _has_text
 
 
+def _open_target_tab(url: str, port: int = CDP_DEBUG_PORT) -> bool:
+    encoded = urllib.parse.quote(url, safe=":/?&=%")
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/json/new?{encoded}",
+            method="PUT",
+            headers={"User-Agent": "douyin-upload"},
+        )
+        with urllib.request.urlopen(req, timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+def _find_existing_upload_tab(browser, url_hint: str = DOUYIN_UPLOAD_URL):
+    hint = (url_hint or "").lower()
+    try:
+        tabs = getattr(browser, "tabs", None) or []
+        for tab in tabs:
+            try:
+                url = (getattr(tab, "url", None) or getattr(getattr(tab, "target", None), "url", None) or "").lower()
+                if "creator.douyin.com" in url and "content/upload" in url:
+                    return tab
+                if hint and url == hint:
+                    return tab
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+async def _browser_get_with_retry(browser, url: str, *, retries: int = 2, wait_seconds: float = 1.5):
+    last_error = None
+    existing = _find_existing_upload_tab(browser, url)
+    if existing is not None:
+        return existing
+    for _ in range(retries + 1):
+        try:
+            return await browser.get(url)
+        except (StopIteration, RuntimeError) as e:
+            last_error = e
+            if "StopIteration" not in str(e) and "coroutine raised StopIteration" not in str(e):
+                raise
+            _open_target_tab(url)
+            await asyncio.sleep(wait_seconds)
+    raise RuntimeError(f"browser.get failed after retry: {last_error}")
+
+
 async def _check_logged_in(browser, account_file: str, account_name: str) -> bool:
     if need_cookie_file(AUTH_MODE) and os.path.exists(account_file):
         try:
@@ -47,10 +98,10 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> boo
         except Exception:
             pass
 
-    tab = await browser.get("https://creator.douyin.com/creator-micro/content/upload")
+    tab = await _browser_get_with_retry(browser, DOUYIN_UPLOAD_URL)
     await tab.sleep(2)
 
-    if "creator.douyin.com/creator-micro/content/upload" not in tab.url:
+    if "creator.douyin.com/creator-micro/content/upload" not in (tab.url or ""):
         douyin_logger.info("[+] 未进入上传页，可能需重新登录")
         return False
 
@@ -83,11 +134,10 @@ async def cookie_auth(account_file: str, account_name: str = "default", reuse_br
 
 
 async def douyin_setup(account_file: str, handle: bool = False, account_name: str = "default"):
-    if not need_cookie_file(AUTH_MODE):
-        existing = await try_connect_existing_chrome()
-        if existing:
-            douyin_logger.info("[+] 已连接并复用已有浏览器")
-            return (True, existing)
+    existing = await try_connect_existing_chrome()
+    if existing:
+        douyin_logger.info("[+] 已连接并复用已有浏览器")
+        return (True, existing)
 
     if need_cookie_file(AUTH_MODE) and not os.path.exists(account_file):
         douyin_logger.info("[+] cookie 文件不存在，请使用 save_douyin_cookie.py 保存 cookie")
@@ -155,7 +205,7 @@ class DouYinVideo(object):
                     except Exception:
                         pass
                 try:
-                    tab = await browser.get("https://creator.douyin.com/creator-micro/content/upload")
+                    tab = await _browser_get_with_retry(browser, DOUYIN_UPLOAD_URL)
                     break
                 except (StopIteration, RuntimeError) as e:
                     if try_reuse:
@@ -163,7 +213,7 @@ class DouYinVideo(object):
                     else:
                         raise
         else:
-            tab = await browser.get("https://creator.douyin.com/creator-micro/content/upload")
+            tab = await _browser_get_with_retry(browser, DOUYIN_UPLOAD_URL)
         publish_success = False
         try:
             douyin_logger.info(f"[+]正在上传-------{self.title}.mp4")
