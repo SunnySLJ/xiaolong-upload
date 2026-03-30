@@ -39,10 +39,10 @@ python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.ope
 python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.openclaw/workspace/xiaolong-upload --platform shipinhao
 ```
 
-若用户不方便回到桌面电脑，可直接走“二维码发微信”模式：
+若用户不方便回到桌面电脑，可直接走“打开二维码并保存到本地目录”模式：
 
 ```bash
-python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.openclaw/workspace/xiaolong-upload --platform kuaishou --notify-wechat
+python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.openclaw/workspace/xiaolong-upload --platform kuaishou
 ```
 
 ## 必须遵守的规则
@@ -58,11 +58,21 @@ python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.ope
    - 打开上传平台网页
    - 切到二维码登录
    - 截图当前二维码
-   - 交给 OpenClaw 发送到微信
    - 持续轮询页面直到检测到已登录
    - 登录成功后，把控制权交还给发布流程继续上传
 
 ## 发布接口约束
+
+若只是“登录检查/补登录”，而不是立刻发布，优先使用：
+
+```bash
+python upload.py --platform <platform> <video_path> --login-only
+```
+
+说明：
+
+- `upload.py` 默认行为是“登录成功后继续发布”
+- 只有显式传 `--login-only`，才会在登录成功后停住，不继续发布
 
 登录完成后的发布统一走：
 
@@ -80,19 +90,18 @@ from upload import upload
 
 ## 远程登录流程
 
-适用场景：用户无法直接操作桌面电脑，只能在微信里完成扫码登录。
+适用场景：用户无法直接操作桌面电脑，需要系统先把二维码保存到本地目录，再由外部 OpenClaw 流程处理后续推送。
 
 1. 调用：
 
 ```bash
-python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.openclaw/workspace/xiaolong-upload --platform <platform> --notify-wechat
+python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.openclaw/workspace/xiaolong-upload --platform <platform>
 ```
 
 2. 脚本会：
    - 拉起该平台专用 connect Chrome
    - 尝试切到二维码登录页
    - 截图当前登录页
-   - 通过 OpenClaw 的 `openclaw-weixin` 通道把截图发到微信
    - 继续轮询浏览器页面，直到检测到已登录
 
 3. 登录成功后：
@@ -101,8 +110,8 @@ python skills/auth/scripts/platform_login.py --project-root /Users/mima0000/.ope
 
 说明：
 
-- 当前环境里稳定可用的是“脚本生成二维码/截图 + OpenClaw 发送到微信 + 页面轮询登录成功”。
-- “等待微信里回复一条登录成功消息”可以作为用户交互提示，但真正的继续条件仍以浏览器页面检测到已登录为准。
+- 当前脚本只负责生成二维码截图并轮询页面登录结果。
+- 后续是否推送到微信，由外部 OpenClaw 配置或其他流程处理。
 
 ## 给其他项目复用
 

@@ -581,58 +581,199 @@ function send(method, params = {}) {
 ws.addEventListener("open", async () => {
   try {
     await send("Runtime.enable");
+    await send("Page.enable");
     const expr = `(() => {
       const text = document.body.innerText || '';
+      const collectByText = (pattern) => [...document.querySelectorAll('a,button,[role="button"],div,span,p')]
+        .map(el => {
+          const value = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
+          const href = el.href || '';
+          const cls = String(el.className || '');
+          let score = 0;
+          if (!value || !pattern.test(value)) return null;
+          if (rect.width >= 20 && rect.height >= 20) score += 20;
+          if (value.length <= 8) score += 30;
+          if (el.tagName === 'A' || el.tagName === 'BUTTON') score += 40;
+          if (href) score += 40;
+          if (/login|upload/i.test(cls)) score += 20;
+          if (getComputedStyle(el).cursor === 'pointer') score += 10;
+          return { el, value, href, score };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score);
+      const findActionByText = (pattern) => {
+        const items = [...document.querySelectorAll('a,button,[role="button"],div,span,p')]
+          .map(el => {
+            const value = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+            const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
+            const href = el.href || '';
+            const cls = String(el.className || '');
+            if (!value || !pattern.test(value)) return null;
+            if (value.length > 12) return null;
+            let score = 0;
+            if (rect.width >= 16 && rect.height >= 16) score += 20;
+            if (value.length <= 6) score += 40;
+            if (el.tagName === 'A' || el.tagName === 'BUTTON') score += 40;
+            if (href) score += 40;
+            if (/login|upload|switch|tab|refresh|retry/i.test(cls)) score += 20;
+            if (getComputedStyle(el).cursor === 'pointer') score += 10;
+            return { el, value, href, score };
+          })
+          .filter(Boolean)
+          .sort((a, b) => b.score - a.score);
+        return items.length ? items[0] : null;
+      };
+      const findByText = (pattern) => {
+        const items = collectByText(pattern);
+        return items.length ? items[0] : null;
+      };
+      const clickNode = (node) => {
+        if (!node) return false;
+        const el = node.el || node;
+        try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); } catch (e) {}
+        try { el.click(); } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); } catch (e) {}
+        return true;
+      };
       if (!location.href.includes('passport.kuaishou.com')) {
-        const loginEntry = [...document.querySelectorAll('a,button,div,span,p')].find(el =>
-          (el.innerText || el.textContent || '').trim() === '立即登录'
-        );
+        const loginEntry = findActionByText(/^立即登录$|^去登录$|^登录$/);
         if (loginEntry) {
-          loginEntry.click();
+          if (loginEntry.href && /passport\.kuaishou\.com/.test(loginEntry.href)) {
+            location.href = loginEntry.href;
+          } else {
+            clickNode(loginEntry);
+          }
+          return { kind: 'retry-needed', waitMs: 1800 };
+        }
+        const uploadEntry = findActionByText(/^去上传$/);
+        if (uploadEntry) {
+          if (uploadEntry.href && /passport\.kuaishou\.com/.test(uploadEntry.href)) {
+            location.href = uploadEntry.href;
+          } else {
+            clickNode(uploadEntry);
+          }
           return { kind: 'retry-needed', waitMs: 1800 };
         }
       }
-      if (text.includes('扫码登录') && !text.includes('快手APP，扫码登录')) {
-        const scanEntry = [...document.querySelectorAll('a,button,div,span,p')].find(el =>
-          (el.innerText || el.textContent || '').trim() === '扫码登录'
-        );
+      const hasQrCandidate = !!document.querySelector(
+        'img[alt="qrcode"], img[class*="qrcode"], img[class*="qr"], canvas[class*="qrcode"], canvas[class*="qr"], [class*="qrcode"] img, [class*="qr"] img'
+      );
+      if ((/密码登录|验证码登录|手机号登录|短信登录/.test(text)) && !hasQrCandidate) {
+        const scanEntry = findActionByText(/^扫码登录$|^APP扫码登录$|^快手APP.*扫码$/) || findByText(/扫码登录|APP扫码登录|快手APP.*扫码/);
         if (scanEntry) {
-          scanEntry.click();
+          clickNode(scanEntry);
           return { kind: 'retry-needed', waitMs: 1500 };
         }
       }
-      if (text.includes('二维码已失效')) {
-        const retry = [...document.querySelectorAll('button,div,span,a,p')].find(el =>
-          (el.innerText || el.textContent || '').trim() === '点击刷新'
-        );
+      if (/二维码已失效|二维码过期|点击刷新/.test(text)) {
+        const retry = findActionByText(/^点击刷新$|^刷新二维码$|^重新获取$|^点击重试$|^刷新$/) || findByText(/点击刷新|刷新二维码|重新获取|点击重试|刷新/);
         if (retry) {
-          retry.click();
+          clickNode(retry);
           return { kind: 'retry-needed', waitMs: 1200 };
         }
       }
-      const img = document.querySelector('img[alt="qrcode"]') ||
-        Array.from(document.images).find(img =>
-          (img.src || '').startsWith('data:image/') && img.naturalWidth >= 100 && img.naturalHeight >= 100
-        );
-      if (img && (img.src || '').startsWith('data:image/')) {
-        return { kind: 'data-url', payload: img.src };
+
+      const scoreImage = (img) => {
+        if (!img) return -1;
+        const rect = img.getBoundingClientRect ? img.getBoundingClientRect() : { width: 0, height: 0 };
+        const src = img.currentSrc || img.src || '';
+        const cls = String(img.className || '');
+        const alt = String(img.alt || '');
+        const parentText = String((img.parentElement && (img.parentElement.innerText || img.parentElement.textContent)) || '');
+        let score = 0;
+        if (/qrcode|qr-code|qr_code|二维码/i.test(cls)) score += 80;
+        if (/qrcode|qr code|二维码/i.test(alt)) score += 60;
+        if (/扫码登录|快手APP|二维码/.test(parentText)) score += 40;
+        if (src.startsWith('data:image/')) score += 30;
+        if (src.startsWith('blob:')) score += 20;
+        if (img.naturalWidth >= 160 && img.naturalHeight >= 160) score += 20;
+        if (Math.abs(img.naturalWidth - img.naturalHeight) <= 20) score += 10;
+        if (rect.width >= 120 && rect.height >= 120) score += 10;
+        return score;
+      };
+
+      const candidates = [
+        ...document.querySelectorAll('img[alt="qrcode"], img[class*="qrcode"], img[class*="qr"], canvas[class*="qrcode"], canvas[class*="qr"]'),
+        ...Array.from(document.images || [])
+      ];
+
+      const uniq = [];
+      const seen = new Set();
+      for (const el of candidates) {
+        const key = String(el.tagName || '') + '|' + String(el.currentSrc || el.src || '') + '|' + String(el.className || '');
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniq.push(el);
+        }
+      }
+
+      const best = uniq
+        .filter(el => {
+          const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+          return rect && rect.width >= 80 && rect.height >= 80;
+        })
+        .map(el => ({ el, score: scoreImage(el), rect: el.getBoundingClientRect() }))
+        .sort((a, b) => b.score - a.score)[0];
+
+      if (!best) {
+        if (/扫码登录|快手APP|二维码/.test(text)) {
+          return { kind: 'retry-needed', waitMs: 1200 };
+        }
+        return null;
+      }
+
+      const img = best.el;
+      if (img.tagName === 'CANVAS') {
+        try {
+          return { kind: 'data-url', payload: img.toDataURL('image/png') };
+        } catch (e) {}
+      }
+
+      const src = img.currentSrc || img.src || '';
+      if (src.startsWith('data:image/')) {
+        return { kind: 'data-url', payload: src };
+      }
+      if (best.rect && best.rect.width >= 100 && best.rect.height >= 100) {
+        return {
+          kind: 'clip',
+          rect: { x: best.rect.left, y: best.rect.top, width: best.rect.width, height: best.rect.height }
+        };
       }
       return null;
     })()`;
     let attempts = 0;
-    while (attempts < 5) {
+    while (attempts < 10) {
       let result = await send("Runtime.evaluate", { expression: expr, returnByValue: true });
       let value = result?.result?.value || null;
       if (value && value.kind === "data-url" && typeof value.payload === "string") {
         fs.writeFileSync(outputPath, Buffer.from(value.payload.split(",")[1], "base64"));
         process.exit(0);
       }
+      if (value && value.kind === "clip" && value.rect) {
+        const pad = 20;
+        const clip = {
+          x: Math.max(0, Number(value.rect.x || 0) - pad),
+          y: Math.max(0, Number(value.rect.y || 0) - pad),
+          width: Math.max(140, Number(value.rect.width || 0) + pad * 2),
+          height: Math.max(140, Number(value.rect.height || 0) + pad * 2),
+          scale: 1,
+        };
+        const shot = await send("Page.captureScreenshot", { format: "png", fromSurface: true, clip });
+        const data = shot?.data || "";
+        if (data) {
+          fs.writeFileSync(outputPath, Buffer.from(data, "base64"));
+          process.exit(0);
+        }
+      }
       if (value && value.kind === "retry-needed") {
         await new Promise((resolve) => setTimeout(resolve, value.waitMs || 1500));
         attempts += 1;
         continue;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1200));
       attempts += 1;
     }
     process.exit(2);
@@ -1225,11 +1366,27 @@ ws.addEventListener("open", async () => {
     for (let i = 0; i < 3; i += 1) {
       const result = await send("Runtime.evaluate", {
         expression: `(() => {
-          const text = (document.body && document.body.innerText || '').slice(0, 4000);
+          const text = (document.body && document.body.innerText || '').slice(0, 12000);
+          const title = document.title || '';
+          const url = location.href || '';
+          const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+            .map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+            .slice(0, 60);
+          const hasUploadInput = !!document.querySelector(
+            'input[type="file"], input[accept*="video"], input[accept*="mp4"], [class*="upload"] input[type="file"]'
+          );
+          const hasReadyUi = hasUploadInput ||
+            /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布/.test(text) ||
+            buttons.some(v => /发布作品|发布视频|上传视频|选择视频|点击上传|发布/.test(v));
           return {
-            text,
-            hasLoginText: /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录/.test(text),
-            hasReadyText: /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布|快手创作者服务平台|作品管理|内容管理|数据中心/.test(text)
+            url,
+            title,
+            hasUploadInput,
+            hasLoginText: /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title),
+            hasReadyText: hasReadyUi && /cp\.kuaishou\.com\/article\/publish/.test(url) &&
+              !/passport\.kuaishou\.com/.test(url) &&
+              !/扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title)
           };
         })()`,
         returnByValue: true
@@ -1244,11 +1401,27 @@ ws.addEventListener("open", async () => {
     }
     const result = await send("Runtime.evaluate", {
       expression: `(() => {
-        const text = (document.body && document.body.innerText || '').slice(0, 4000);
+        const text = (document.body && document.body.innerText || '').slice(0, 12000);
+        const title = document.title || '';
+        const url = location.href || '';
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+          .map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, 60);
+        const hasUploadInput = !!document.querySelector(
+          'input[type="file"], input[accept*="video"], input[accept*="mp4"], [class*="upload"] input[type="file"]'
+        );
+        const hasReadyUi = hasUploadInput ||
+          /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布/.test(text) ||
+          buttons.some(v => /发布作品|发布视频|上传视频|选择视频|点击上传|发布/.test(v));
         return {
-          text,
-          hasLoginText: /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录/.test(text),
-          hasReadyText: /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布|快手创作者服务平台|作品管理|内容管理|数据中心/.test(text)
+          url,
+          title,
+          hasUploadInput,
+          hasLoginText: /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title),
+          hasReadyText: hasReadyUi && /cp\.kuaishou\.com\/article\/publish/.test(url) &&
+            !/passport\.kuaishou\.com/.test(url) &&
+            !/扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title)
         };
       })()`,
       returnByValue: true
@@ -1281,6 +1454,7 @@ ws.addEventListener("open", async () => {
                     return False
             except Exception:
                 return False
+        return False
     if platform_name == "shipinhao":
         ws_url = tab.get("webSocketDebuggerUrl") or ""
         if ws_url:
@@ -1366,6 +1540,8 @@ ws.addEventListener("open", async () => {
                     return False
             except Exception:
                 return False
+    if platform_name == "kuaishou":
+        return False
     markers = tuple(m.lower() for m in PLATFORMS[platform_name]["login_markers"])
     return not any(marker in url for marker in markers)
 
@@ -1408,6 +1584,12 @@ def _revive_connect_session_for_check(
     return []
 
 
+def _post_revival_stabilize(platform_name: str) -> None:
+    if platform_name != "shipinhao":
+        return
+    time.sleep(2.0)
+
+
 def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[bool, str]:
     root = root or project_root()
     cfg = PLATFORMS[platform_name]
@@ -1419,6 +1601,8 @@ def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[
         tabs = _revive_connect_session_for_check(platform_name, root)
         if not tabs:
             return False, f"{cfg['label']} connect 端口 {cfg['port']} 未监听，且无法恢复本地会话"
+        _post_revival_stabilize(platform_name)
+        tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
         revived = True
     else:
         tabs = ensure_page_target(platform_name)
@@ -1441,7 +1625,6 @@ def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[
 def ensure_platform_login(
     platform_name: str,
     timeout: int = 300,
-    notify_wechat: bool = False,
 ) -> tuple[bool, str]:
     root = project_root()
     cfg = PLATFORMS[platform_name]
@@ -1464,12 +1647,6 @@ def ensure_platform_login(
         print(f"{cfg['label']} 登录页已打开，但本次未提取到二维码图片")
     last_qr_refresh = time.time()
 
-    if notify_wechat:
-        if screenshot_path and send_wechat_notification(platform_name, screenshot_path):
-            print(f"{cfg['label']} 登录二维码已发送到微信：{screenshot_path}")
-        else:
-            print(f"{cfg['label']} 登录页已打开，但二维码发送到微信失败")
-
     deadline = time.time() + timeout
     while time.time() < deadline:
         ok, msg = check_platform_login(platform_name, root)
@@ -1479,8 +1656,6 @@ def ensure_platform_login(
             screenshot_path = capture_login_screenshot(platform_name, root)
             if screenshot_path:
                 print(f"{cfg['label']} 登录二维码已刷新：{screenshot_path}")
-                if notify_wechat:
-                    send_wechat_notification(platform_name, screenshot_path)
             last_qr_refresh = time.time()
         time.sleep(3)
     return False, f"{cfg['label']} 登录超时，请稍后重试"
@@ -1492,7 +1667,6 @@ def _main() -> int:
     parser.add_argument("--check-only", action="store_true", help="仅检查当前登录是否可复用")
     parser.add_argument("--timeout", type=int, default=300, help="等待登录超时时间（秒）")
     parser.add_argument("--project-root", default="", help="项目根目录；不传则默认取当前仓库")
-    parser.add_argument("--notify-wechat", action="store_true", help="打开二维码后截图并发送到微信")
     args = parser.parse_args()
 
     global _PROJECT_ROOT_OVERRIDE
@@ -1505,7 +1679,6 @@ def _main() -> int:
         ok, msg = ensure_platform_login(
             args.platform,
             timeout=args.timeout,
-            notify_wechat=args.notify_wechat,
         )
 
     print(msg)

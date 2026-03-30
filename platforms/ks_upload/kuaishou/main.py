@@ -131,16 +131,41 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
         tab = await browser.get(KS_UPLOAD_URL)
         await tab.sleep(2)
 
-    url_lower = (tab.url or "").lower()
-    if "login" in url_lower or "passport" in url_lower:
-        kuaishou_logger.info("[+] 检测到登录页，cookie/会话已失效")
-        return False, None, None
-    if await _has_text(tab, "扫码登录") or await _has_text(tab, "短信登录") or await _has_text(tab, "发送验证码"):
-        kuaishou_logger.info("[+] 检测到登录页，需要登录")
-        return False, None, None
+    for retry in range(3):
+        url_lower = (tab.url or "").lower()
+        if "login" in url_lower or "passport" in url_lower:
+            kuaishou_logger.info("[+] 检测到登录页，cookie/会话已失效")
+            return False, None, None
+        if await _has_text(tab, "扫码登录") or await _has_text(tab, "短信登录") or await _has_text(tab, "发送验证码"):
+            kuaishou_logger.info("[+] 检测到登录页，需要登录")
+            return False, None, None
+        if await _is_publish_ready(tab):
+            kuaishou_logger.info("[+] 已登录，发布页已就绪")
+            return True, browser, tab
+        if retry < 2:
+            kuaishou_logger.info("[-] 当前页面未识别到发布控件，等待页面继续加载...")
+            await tab.sleep(2)
 
-    kuaishou_logger.info("[+] 已登录，沿用当前页面")
-    return True, browser, tab
+    try:
+        diag = await tab.evaluate(
+            """
+            JSON.stringify({
+              url: location.href,
+              title: document.title || '',
+              buttons: Array.from(document.querySelectorAll('button, [role="button"]'))
+                .map((el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
+                .filter(Boolean)
+                .slice(0, 12)
+            })
+            """,
+            return_by_value=True,
+        )
+        kuaishou_logger.warning(f"[-] 登录态诊断: {diag}")
+    except Exception as e:
+        kuaishou_logger.debug(f"[-] 登录态诊断失败: {e}")
+
+    kuaishou_logger.info("[+] 当前页面不像登录页，但发布页未就绪，按未登录处理")
+    return False, None, None
 
 
 async def cookie_auth(account_file: str, account_name: str = "default") -> tuple[bool, object, object]:
@@ -185,7 +210,7 @@ async def kuaishou_setup(account_file: str, handle: bool = False, account_name: 
 
 async def _is_login_page(tab) -> bool:
     url = (tab.url or "").lower()
-    if "article/publish" in url or "cp.kuaishou.com" in url and "login" not in url and "passport" not in url:
+    if await _is_publish_ready(tab):
         return False
     if "login" in url or "passport" in url:
         return True
@@ -199,6 +224,64 @@ async def _is_login_page(tab) -> bool:
         return True
     if await _has_text(tab, "手机号登录", timeout=1):
         return True
+    return False
+
+
+async def _is_publish_ready(tab) -> bool:
+    """判断是否真正进入了可用的发布页，而不是仅仅不在登录页。"""
+    selectors = (
+        'input[type="file"][accept*="video"]',
+        'input[type="file"][accept*="mp4"]',
+        'input[type="file"]',
+        'input.upload-input',
+        '[class*="upload"] input[type="file"]',
+        '[class*="Upload"] input',
+        '[data-testid*="upload"] input',
+        'input[accept*="video"]',
+    )
+
+    for sel in selectors:
+        try:
+            els = await tab.select_all(sel, timeout=0.6, include_frames=True)
+            if els:
+                return True
+        except Exception:
+            continue
+
+    for text in ("上传视频", "选择视频", "点击上传", "拖拽上传", "发布作品", "发布"):
+        try:
+            if await _has_text(tab, text, timeout=0.6):
+                return True
+        except Exception:
+            continue
+
+    try:
+        payload = await tab.evaluate(
+            """
+            (() => {
+              const text = (document.body && document.body.innerText || '').slice(0, 12000);
+              const title = document.title || '';
+              const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+                .map((el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
+                .filter(Boolean)
+                .slice(0, 60);
+              const hasUploadInput = !!document.querySelector(
+                'input[type="file"], input[accept*="video"], input[accept*="mp4"], [class*="upload"] input[type="file"]'
+              );
+              const hasLoginText = /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\\n' + title);
+              const hasReadyUi = hasUploadInput ||
+                /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布/.test(text) ||
+                buttons.some((v) => /发布作品|发布视频|上传视频|选择视频|点击上传|发布/.test(v));
+              return hasReadyUi && !hasLoginText;
+            })()
+            """,
+            return_by_value=True,
+        )
+        if payload:
+            return True
+    except Exception:
+        pass
+
     return False
 
 

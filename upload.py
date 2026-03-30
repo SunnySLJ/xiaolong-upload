@@ -98,6 +98,7 @@ def upload(
     account_name: str = "default",
     handle_login: bool = True,
     notify_login_wechat: bool = False,
+    login_only: bool = False,
 ) -> bool:
     """
     统一上传入口
@@ -109,6 +110,7 @@ def upload(
     :param account_name: 账号名
     :param handle_login: 未登录时是否打开浏览器
     :param notify_login_wechat: 登录失效时是否把二维码发到微信
+    :param login_only: 仅检查/完成登录，不继续上传
     """
     # 入口层只做路由与参数清洗，登录/上传细节由平台模块负责。
     platform = platform.lower().strip()
@@ -133,9 +135,13 @@ def upload(
         return False
     safe_print(msg)
 
+    if login_only:
+        safe_print(f"{platform} 登录检查完成，按要求不继续发布。")
+        return True
+
     # 每个平台的 upload_to_xxx 会完成：
     # 1) 登录态校验/引导登录 2) 打开发布页 3) 上传并发布
-    return _DISPATCH[platform](
+    ok = _DISPATCH[platform](
         video_path=video_path,
         title=title,
         description=description,
@@ -143,6 +149,11 @@ def upload(
         account_name=account_name,
         handle_login=False,
     )
+    
+        # 发布成功后不再移动视频，由用户每周定时任务统一清理
+    # published_dir 仅作为历史参考，新视频保留在原始位置
+    
+    return ok
 
 
 def _main():
@@ -166,6 +177,7 @@ def _main():
     parser.add_argument("--account", default="default", help="账号名")
     parser.add_argument("--no-login", action="store_true", help="未登录时不自动打开浏览器")
     parser.add_argument("--notify-login-wechat", action="store_true", help="登录失效时把二维码发到微信")
+    parser.add_argument("--login-only", action="store_true", help="只完成登录检查/登录，不继续发布")
     args = parser.parse_args()
 
     # CLI 入参统一在这里转成标准 tags 列表，避免平台侧重复解析。
@@ -180,6 +192,7 @@ def _main():
         account_name=args.account,
         handle_login=not args.no_login,
         notify_login_wechat=args.notify_login_wechat,
+        login_only=args.login_only,
     )
     sys.exit(0 if ok else 1)
 

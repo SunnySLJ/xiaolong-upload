@@ -260,16 +260,50 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
                 shipinhao_logger.error("[-] browser.get() 重试失败")
                 return False, None
     
-    await tab.sleep(2)
-
-    # 视频号登录页检测：微信扫码
+    # 视频号登录页检测
+    await tab.sleep(5)
+    
     url_lower = (tab.url or "").lower()
     if "login" in url_lower or "mp.weixin.qq.com" in url_lower:
         shipinhao_logger.info("[+] 检测到登录页，cookie/会话已失效")
         return False, None
-    if await _has_text(tab, "微信扫码") or await _has_text(tab, "扫码登录") or await _has_text(tab, "请使用微信扫码"):
-        shipinhao_logger.info("[+] 检测到登录页，需要微信扫码登录")
-        return False, None
+    
+    # 检查是否已登录：查找发布相关元素
+    await tab.sleep(3)
+    
+    # 先判断是否有"发布"按钮（已登录的标志）
+    for i in range(3):
+        try:
+            has_publish = await _has_text(tab, "发表", timeout=3) or await _has_text(tab, "发布", timeout=3) or await _has_text(tab, "上传视频", timeout=3)
+        except Exception:
+            has_publish = False
+            
+        if has_publish:
+            shipinhao_logger.info("[+] 已登录（检测到发布按钮）")
+            return True, tab
+        
+        await tab.sleep(3)
+    
+    # 如果没有发布按钮，再检查是否需要扫码
+    for i in range(3):
+        try:
+            has_login = await _has_text(tab, "微信扫码", timeout=3) or await _has_text(tab, "扫码登录", timeout=3) or await _has_text(tab, "请使用微信扫码", timeout=3)
+        except Exception:
+            has_login = False
+        
+        if has_login:
+            if i < 2:
+                await tab.sleep(3)
+                continue
+            shipinhao_logger.info("[+] 检测到登录页，需要微信扫码登录")
+            return False, None
+        else:
+            break
+
+    # 如果都不确定，看 URL 是否在发布页
+    if "post/create" in url_lower or "publish" in url_lower:
+        shipinhao_logger.info("[+] 已登录（URL 显示在发布页）")
+        return True, tab
 
     shipinhao_logger.info("[+] 已登录")
     return True, tab

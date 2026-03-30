@@ -139,37 +139,43 @@ async def _wait_for_login(browser, account_file: str, account_name: str, timeout
     return False
 
 
-async def _find_publish_button(tab):
-    """优先命中真正的发布按钮，避免把“高清发布”之类开关误识别成发布入口。"""
+async def _click_publish_button(tab) -> bool:
+    """只点击真正的发布按钮，避免误点“高清发布”等其他入口。"""
     try:
-        btn = await tab.find("立即发布", best_match=True, timeout=1)
-        if btn:
-            return btn
+        clicked = await tab.evaluate(
+            """
+            (() => {
+              const nodes = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
+              const target = nodes.find((el) => {
+                const text = (el.innerText || el.textContent || '').trim();
+                return text === '发布' || text === '立即发布';
+              });
+              if (!target) return false;
+              target.click();
+              return true;
+            })()
+            """,
+            return_by_value=True,
+        )
+        if clicked:
+            return True
     except Exception:
         pass
     try:
-        js = """
-        (() => {
-          const nodes = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
-          const target = nodes.find((el) => {
-            const text = (el.innerText || el.textContent || '').trim();
-            return text === '发布' || text === '立即发布';
-          });
-          return target || null;
-        })()
-        """
-        btn = await tab.evaluate_handle(js)
+        btn = await tab.find("立即发布", best_match=True, timeout=1)
         if btn:
-            return btn
+            await btn.click()
+            return True
     except Exception:
         pass
     try:
         btn = await tab.find("发布", best_match=False, timeout=1)
         if btn:
-            return btn
+            await btn.click()
+            return True
     except Exception:
         pass
-    return None
+    return False
 
 
 async def cookie_auth(account_file: str, account_name: str = "default", reuse_browser: bool = False):
@@ -383,10 +389,10 @@ class DouYinVideo(object):
 
             publish_clicked = False
             for i in range(40):
-                pub_btn = await _find_publish_button(tab)
-                if pub_btn and not publish_clicked:
-                    await pub_btn.click()
+                should_retry_click = (not publish_clicked) or (i > 0 and i % 12 == 0)
+                if should_retry_click and await _click_publish_button(tab):
                     publish_clicked = True
+                    douyin_logger.info("[-] 已点击发布按钮")
                 await tab.sleep(0.3)
                 if "manage" in (tab.url or ""):
                     douyin_logger.success("[-] 视频发布成功")
