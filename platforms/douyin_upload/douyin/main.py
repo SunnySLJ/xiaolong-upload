@@ -30,7 +30,13 @@ def _patch_nodriver_cookie():
 _patch_nodriver_cookie()
 
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS, AUTH_MODE, CDP_DEBUG_PORT
-from douyin.browser import DOUYIN_UPLOAD_URL, get_browser, try_connect_existing_chrome
+from douyin.browser import (
+    DOUYIN_UPLOAD_URL,
+    get_browser,
+    try_connect_existing_chrome,
+    ensure_connect_login_chrome,
+    attach_login_chrome,
+)
 from common.utils import need_cookie_file, load_cookies_from_file, save_cookies_to_json
 from common.loggers import douyin_logger
 
@@ -113,6 +119,59 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> boo
     return True
 
 
+async def _wait_for_login(browser, account_file: str, account_name: str, timeout: int = 300, poll_interval: int = 5) -> bool:
+    """等待用户在已打开的抖音登录页完成扫码登录。"""
+    elapsed = 0
+    while elapsed < timeout:
+        if await _check_logged_in(browser, account_file, account_name):
+            if need_cookie_file(AUTH_MODE):
+                try:
+                    ok = await asyncio.wait_for(save_cookies_to_json(browser, account_file), timeout=5.0)
+                    if ok:
+                        douyin_logger.success("[-] 登录后 cookie 已更新")
+                except (asyncio.TimeoutError, Exception) as e:
+                    douyin_logger.warning(f"[-] 登录后保存 cookie 跳过: {e}")
+            return True
+        douyin_logger.info(f"[-] 等待抖音扫码登录中... ({elapsed + poll_interval}s)")
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+    douyin_logger.error("[-] 抖音登录超时")
+    return False
+
+
+async def _find_publish_button(tab):
+    """优先命中真正的发布按钮，避免把“高清发布”之类开关误识别成发布入口。"""
+    try:
+        btn = await tab.find("立即发布", best_match=True, timeout=1)
+        if btn:
+            return btn
+    except Exception:
+        pass
+    try:
+        js = """
+        (() => {
+          const nodes = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
+          const target = nodes.find((el) => {
+            const text = (el.innerText || el.textContent || '').trim();
+            return text === '发布' || text === '立即发布';
+          });
+          return target || null;
+        })()
+        """
+        btn = await tab.evaluate_handle(js)
+        if btn:
+            return btn
+    except Exception:
+        pass
+    try:
+        btn = await tab.find("发布", best_match=False, timeout=1)
+        if btn:
+            return btn
+    except Exception:
+        pass
+    return None
+
+
 async def cookie_auth(account_file: str, account_name: str = "default", reuse_browser: bool = False):
     for try_reuse in (True, False):
         res = await get_browser(headless=LOCAL_CHROME_HEADLESS, account_name=account_name, try_reuse=try_reuse)
@@ -139,7 +198,30 @@ async def douyin_setup(account_file: str, handle: bool = False, account_name: st
         douyin_logger.info("[+] 已连接并复用已有浏览器")
         return (True, existing)
 
+    if ensure_connect_login_chrome():
+        try:
+            browser, tab = await attach_login_chrome()
+            ok = await _check_logged_in(browser, account_file, account_name)
+            if ok:
+                douyin_logger.info("[+] 已连接抖音专用 connect Chrome")
+                return (True, (browser, tab))
+            if handle:
+                douyin_logger.info("[+] 需要登录，请在抖音专用 connect Chrome 中完成扫码")
+                if await _wait_for_login(browser, account_file, account_name):
+                    checked_tab = await _browser_get_with_retry(browser, DOUYIN_UPLOAD_URL)
+                    return (True, (browser, checked_tab))
+                return (False, None)
+        except Exception as e:
+            douyin_logger.warning(f"[-] connect Chrome 预检失败 ({e})，继续尝试其他登录方式")
+
     if need_cookie_file(AUTH_MODE) and not os.path.exists(account_file):
+        if handle:
+            browser, tab = await attach_login_chrome()
+            douyin_logger.info("[+] cookie 文件不存在，已打开抖音登录页，请完成扫码登录")
+            if await _wait_for_login(browser, account_file, account_name):
+                checked_tab = await _browser_get_with_retry(browser, DOUYIN_UPLOAD_URL)
+                return (True, (browser, checked_tab))
+            return (False, None)
         douyin_logger.info("[+] cookie 文件不存在，请使用 save_douyin_cookie.py 保存 cookie")
         douyin_logger.info("    用法: python save_douyin_cookie.py \"sessionid=xxx; sid_tt=yyy; ...\"")
         return (False, None)
@@ -148,6 +230,13 @@ async def douyin_setup(account_file: str, handle: bool = False, account_name: st
     if ok and browser is not None:
         return (True, browser)
     if not ok:
+        if handle:
+            browser, tab = await attach_login_chrome()
+            douyin_logger.info("[+] cookie 已失效，已打开抖音登录页，请完成扫码登录")
+            if await _wait_for_login(browser, account_file, account_name):
+                checked_tab = await _browser_get_with_retry(browser, DOUYIN_UPLOAD_URL)
+                return (True, (browser, checked_tab))
+            return (False, None)
         douyin_logger.info("[+] cookie 已失效，请重新获取 cookie 并用 save_douyin_cookie.py 保存")
         return (False, None)
     return (True, None)
@@ -292,13 +381,12 @@ class DouYinVideo(object):
             if self.publish_date != 0:
                 await self.set_schedule_time_douyin(tab, self.publish_date)
 
+            publish_clicked = False
             for i in range(40):
-                try:
-                    pub_btn = await tab.find("发布", best_match=True, timeout=1 if i > 0 else 5)
-                except Exception:
-                    pub_btn = None
-                if pub_btn:
+                pub_btn = await _find_publish_button(tab)
+                if pub_btn and not publish_clicked:
                     await pub_btn.click()
+                    publish_clicked = True
                 await tab.sleep(0.3)
                 if "manage" in (tab.url or ""):
                     douyin_logger.success("[-] 视频发布成功")
@@ -310,6 +398,7 @@ class DouYinVideo(object):
                     need_cover = None
                 if need_cover:
                     await self.handle_auto_video_cover(tab)
+                    publish_clicked = False
                 elif i > 0 and i % 8 == 0:
                     douyin_logger.info(f"[-] 等待发布结果... ({i // 4}s)")
             else:

@@ -17,8 +17,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from common.python_runtime import ensure_preferred_python_3_11
+from common.platform_auth import check_platform_login, ensure_platform_login
 from common.console import ensure_console_ready, safe_print
 
+ensure_preferred_python_3_11()
 ensure_console_ready()
 
 if sys.version_info < (3, 10):
@@ -94,6 +97,7 @@ def upload(
     tags: list | None = None,
     account_name: str = "default",
     handle_login: bool = True,
+    notify_login_wechat: bool = False,
 ) -> bool:
     """
     统一上传入口
@@ -104,6 +108,7 @@ def upload(
     :param tags: 标签列表
     :param account_name: 账号名
     :param handle_login: 未登录时是否打开浏览器
+    :param notify_login_wechat: 登录失效时是否把二维码发到微信
     """
     # 入口层只做路由与参数清洗，登录/上传细节由平台模块负责。
     platform = platform.lower().strip()
@@ -114,6 +119,20 @@ def upload(
     tags = tags or []
     tags = [t.strip() for t in tags if t]
 
+    if handle_login:
+        ok, msg = ensure_platform_login(
+            platform,
+            project_root=_PROJECT_ROOT,
+            timeout=300,
+            notify_wechat=notify_login_wechat,
+        )
+    else:
+        ok, msg = check_platform_login(platform, project_root=_PROJECT_ROOT)
+    if not ok:
+        safe_print(f"错误: {msg}")
+        return False
+    safe_print(msg)
+
     # 每个平台的 upload_to_xxx 会完成：
     # 1) 登录态校验/引导登录 2) 打开发布页 3) 上传并发布
     return _DISPATCH[platform](
@@ -122,7 +141,7 @@ def upload(
         description=description,
         tags=tags,
         account_name=account_name,
-        handle_login=handle_login,
+        handle_login=False,
     )
 
 
@@ -146,6 +165,7 @@ def _main():
     parser.add_argument("tags", nargs="?", default="", help="标签，逗号分隔")
     parser.add_argument("--account", default="default", help="账号名")
     parser.add_argument("--no-login", action="store_true", help="未登录时不自动打开浏览器")
+    parser.add_argument("--notify-login-wechat", action="store_true", help="登录失效时把二维码发到微信")
     args = parser.parse_args()
 
     # CLI 入参统一在这里转成标准 tags 列表，避免平台侧重复解析。
@@ -159,6 +179,7 @@ def _main():
         tags=tags_list,
         account_name=args.account,
         handle_login=not args.no_login,
+        notify_login_wechat=args.notify_login_wechat,
     )
     sys.exit(0 if ok else 1)
 

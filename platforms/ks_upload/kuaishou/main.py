@@ -193,7 +193,11 @@ async def _is_login_page(tab) -> bool:
         return True
     if await _has_text(tab, "扫码登录", timeout=1):
         return True
+    if await _has_text(tab, "短信登录", timeout=1):
+        return True
     if await _has_text(tab, "验证码", timeout=1):
+        return True
+    if await _has_text(tab, "手机号登录", timeout=1):
         return True
     return False
 
@@ -216,7 +220,7 @@ async def kuaishou_cookie_gen(account_file: str, account_name: str = "default"):
     else:
         kuaishou_logger.info("[+] 请在浏览器中扫码或验证码登录快手，登录成功约 15 秒内会自动跳转")
 
-    poll_interval = 15
+    poll_interval = 3
     max_wait = 600
     for elapsed in range(0, max_wait, poll_interval):
         await tab.sleep(poll_interval)
