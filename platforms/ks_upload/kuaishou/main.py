@@ -34,6 +34,79 @@ def _step_log(msg: str, elapsed: float | None = None):
 
 
 async def _upload_file_via_cdp(tab, file_path: str) -> bool:
+    """通过 CDP 设置文件，支持 iframe + shadow DOM，使用 object_id。"""
+    try:
+        from nodriver import cdp
+        abs_path = os.path.abspath(file_path)
+        result = await tab.send(
+            cdp.runtime.evaluate(
+                expression=_js_find_file_input(),
+                return_by_value=False,
+            )
+        )
+        robj = result[0] if isinstance(result, (list, tuple)) else result
+        err = result[1] if isinstance(result, (list, tuple)) and len(result) > 1 else None
+        if err or not robj:
+            return await _upload_file_via_cdp_legacy(tab, file_path)
+        oid = getattr(robj, "object_id", None)
+        if not oid or (hasattr(robj, "type_") and getattr(robj, "subtype", None) == "null"):
+            return await _upload_file_via_cdp_legacy(tab, file_path)
+        await tab.send(cdp.dom.set_file_input_files(files=[abs_path], object_id=oid))
+        return True
+    except Exception as e:
+        kuaishou_logger.debug(f"CDP 上传 fallback 失败: {e}")
+        return await _upload_file_via_cdp_legacy(tab, file_path)
+
+
+def _js_find_file_input() -> str:
+    return r"""
+    (() => {
+        function findIn(doc){
+            if(!doc || !doc.querySelectorAll) return null;
+            const sels = [
+                'input[type="file"][accept*="video"]',
+                'input[type="file"][accept*="mp4"]',
+                'input[type="file"]',
+                'input.upload-input',
+                '[class*="upload"] input[type="file"]',
+                '[class*="Upload"] input',
+                '[data-testid*="upload"] input',
+                'input[accept*="video"]',
+            ];
+            for (const sel of sels) {
+                const inp = doc.querySelector(sel);
+                if (inp) return inp;
+            }
+            return null;
+        }
+        function search(doc, depth){
+            if(!doc || depth > 4) return null;
+            let r = findIn(doc);
+            if(r) return r;
+            const ifs = doc.querySelectorAll ? doc.querySelectorAll('iframe') : [];
+            for(let i = 0; i < ifs.length; i++){
+                try{
+                    if(ifs[i].contentDocument){
+                        r = search(ifs[i].contentDocument, depth + 1);
+                        if(r) return r;
+                    }
+                }catch(e){}
+            }
+            const all = doc.querySelectorAll ? doc.querySelectorAll('*') : [];
+            for(let j = 0; j < all.length; j++){
+                if(all[j].shadowRoot){
+                    r = search(all[j].shadowRoot, depth + 1);
+                    if(r) return r;
+                }
+            }
+            return null;
+        }
+        return search(document, 0);
+    })()
+    """
+
+
+async def _upload_file_via_cdp_legacy(tab, file_path: str) -> bool:
     try:
         from nodriver import cdp
         doc = await tab.send(cdp.dom.get_document(-1, True))

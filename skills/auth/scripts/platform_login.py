@@ -7,9 +7,11 @@ This copy lives inside the auth skill so it can be reused independently.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import platform as sys_platform
+import signal
 import socket
 import subprocess
 import sys
@@ -18,6 +20,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+import websockets
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
@@ -40,6 +44,14 @@ PLATFORMS = {
         ),
         "login_markers": ("login", "passport", "扫码登录", "手机号登录"),
         "qr_switch_texts": ("扫码登录",),
+        "required_cookie_names": (
+            "sessionid",
+            "sessionid_ss",
+            "sid_tt",
+            "uid_tt",
+            "sid_guard",
+        ),
+        "required_cookie_hits": 2,
     },
     "xiaohongshu": {
         "label": "小红书",
@@ -54,6 +66,14 @@ PLATFORMS = {
         ),
         "login_markers": ("login", "短信登录", "扫码登录"),
         "qr_switch_texts": ("扫码登录",),
+        "required_cookie_names": (
+            "galaxy_creator_session_id",
+            "access-token-creator.xiaohongshu.com",
+            "galaxy.creator.beaker.session.id",
+            "customer-sso-sid",
+            "x-user-id-creator.xiaohongshu.com",
+        ),
+        "required_cookie_hits": 2,
     },
     "kuaishou": {
         "label": "快手",
@@ -67,6 +87,13 @@ PLATFORMS = {
         ),
         "login_markers": ("login", "passport", "扫码登录"),
         "qr_switch_texts": ("扫码登录",),
+        "required_cookie_names": (
+            "kuaishou.web.cp.api_st",
+            "kuaishou.web.cp.api_ph",
+            "userId",
+            "bUserId",
+        ),
+        "required_cookie_hits": 2,
     },
     "shipinhao": {
         "label": "视频号",
@@ -76,6 +103,11 @@ PLATFORMS = {
         "ready_markers": ("channels.weixin.qq.com/platform/post/create",),
         "login_markers": ("login", "mp.weixin.qq.com", "微信扫码", "扫码登录"),
         "qr_switch_texts": (),
+        "required_cookie_names": (
+            "sessionid",
+            "wxuin",
+        ),
+        "required_cookie_hits": 2,
     },
 }
 
@@ -115,6 +147,39 @@ def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
+def close_connect_browser(platform_name: str, timeout: float = 8.0) -> bool:
+    port = PLATFORMS[platform_name]["port"]
+    try:
+        result = subprocess.run(
+            ["lsof", "-tiTCP:%d" % port, "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return False
+    pids = []
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
+    if not pids:
+        return False
+    for pid in sorted(set(pids)):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not is_port_listening(port):
+            return True
+        time.sleep(0.2)
+    return not is_port_listening(port)
+
+
 def _devtools_get(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": "platform-login-helper"})
     with urllib.request.urlopen(req, timeout=2) as resp:
@@ -126,6 +191,66 @@ def devtools_tabs(port: int) -> list[dict]:
         return _devtools_get(f"http://127.0.0.1:{port}/json/list")
     except Exception:
         return []
+
+
+async def _cdp_fetch_cookies(ws_url: str, base_url: str, timeout: float = 5.0) -> list[dict]:
+    async with websockets.connect(ws_url, open_timeout=timeout, close_timeout=timeout) as ws:
+        req_id = 1
+        await ws.send(json.dumps({
+            "id": req_id,
+            "method": "Network.getCookies",
+            "params": {"urls": [base_url]},
+        }))
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            msg = json.loads(raw)
+            if msg.get("id") == req_id:
+                return msg.get("result", {}).get("cookies", [])
+
+
+async def _cdp_runtime_evaluate(ws_url: str, expression: str, timeout: float = 5.0):
+    async with websockets.connect(ws_url, open_timeout=timeout, close_timeout=timeout) as ws:
+        req_id = 1
+        await ws.send(json.dumps({"id": req_id, "method": "Runtime.enable", "params": {}}))
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            msg = json.loads(raw)
+            if msg.get("id") == req_id:
+                break
+        req_id = 2
+        await ws.send(json.dumps({
+            "id": req_id,
+            "method": "Runtime.evaluate",
+            "params": {"expression": expression, "returnByValue": True},
+        }))
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            msg = json.loads(raw)
+            if msg.get("id") == req_id:
+                return msg.get("result", {}).get("result", {}).get("value")
+
+
+def _has_required_login_cookies(platform_name: str, tab: dict) -> bool:
+    cfg = PLATFORMS[platform_name]
+    cookie_names = tuple(cfg.get("required_cookie_names", ()))
+    min_hits = int(cfg.get("required_cookie_hits", 0) or 0)
+    if not cookie_names or min_hits <= 0:
+        return True
+    ws_url = tab.get("webSocketDebuggerUrl") or ""
+    base_url = tab.get("url") or cfg["url"]
+    if not ws_url or not base_url:
+        return False
+    try:
+        cookies = asyncio.run(_cdp_fetch_cookies(ws_url, base_url, timeout=5.0))
+    except Exception:
+        return False
+    names = {
+        str(cookie.get("name") or "")
+        for cookie in cookies
+        if cookie.get("name") and cookie.get("value")
+    }
+    hits = sum(1 for name in cookie_names if name in names)
+    return hits >= min_hits
 
 
 def ensure_page_target(platform_name: str, retries: int = 3, wait_seconds: float = 1.0) -> list[dict]:
@@ -1196,11 +1321,32 @@ ws.addEventListener("open", async () => {
     for (let i = 0; i < 3; i += 1) {
       const result = await send("Runtime.evaluate", {
         expression: `(() => {
-          const text = (document.body && document.body.innerText || '').slice(0, 4000);
+          const text = (document.body && document.body.innerText || '').slice(0, 12000);
+          const title = document.title || '';
+          const url = location.href || '';
+          const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+            .map(el => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
+            .filter(Boolean)
+            .slice(0, 80);
+          const hasUploadInput = !!document.querySelector(
+            'div[class^="container"] input[type="file"], div.progress-div input[type="file"], input[type="file"]'
+          );
+          const loginSignals = text + '\\n' + title;
+          const hasLoginText = /扫码登录|手机号登录|验证码登录|密码登录|登录抖音创作者中心|登录\\/注册|获取验证码|打开「抖音APP」|我是创作者|我是MCN机构/.test(loginSignals);
+          const hasLoginForm = !!document.querySelector(
+            'input[type="tel"], input[placeholder*="手机号"], input[placeholder*="验证码"]'
+          );
+          const hasReadyUi = hasUploadInput ||
+            /上传视频|发布视频|发布作品|重新上传|作品描述|添加简介|定时发布|封面设置|声明内容由AI生成/.test(text) ||
+            buttons.some(v => /上传视频|发布视频|发布作品|选择视频|重新上传|定时发布|作品描述|封面设置|发布/.test(v));
           return {
-            text,
-            hasLoginText: /扫码登录|手机号登录|验证码登录|登录抖音创作者中心/.test(text),
-            hasReadyText: /创作者服务中心|创作者中心|发布作品|上传视频|发布视频|作品管理|新的创作|数据中心/.test(text)
+            url,
+            title,
+            hasUploadInput,
+            hasLoginText: hasLoginText || hasLoginForm,
+            hasReadyText: hasReadyUi &&
+              /creator\\.douyin\\.com\\/creator-micro\\/content\\/upload/.test(url) &&
+              !(hasLoginText || hasLoginForm)
           };
         })()`,
         returnByValue: true
@@ -1215,11 +1361,32 @@ ws.addEventListener("open", async () => {
     }
     const result = await send("Runtime.evaluate", {
       expression: `(() => {
-        const text = (document.body && document.body.innerText || '').slice(0, 4000);
+        const text = (document.body && document.body.innerText || '').slice(0, 12000);
+        const title = document.title || '';
+        const url = location.href || '';
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+          .map(el => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, 80);
+        const hasUploadInput = !!document.querySelector(
+          'div[class^="container"] input[type="file"], div.progress-div input[type="file"], input[type="file"]'
+        );
+        const loginSignals = text + '\\n' + title;
+        const hasLoginText = /扫码登录|手机号登录|验证码登录|密码登录|登录抖音创作者中心|登录\\/注册|获取验证码|打开「抖音APP」|我是创作者|我是MCN机构/.test(loginSignals);
+        const hasLoginForm = !!document.querySelector(
+          'input[type="tel"], input[placeholder*="手机号"], input[placeholder*="验证码"]'
+        );
+        const hasReadyUi = hasUploadInput ||
+          /上传视频|发布视频|发布作品|重新上传|作品描述|添加简介|定时发布|封面设置|声明内容由AI生成/.test(text) ||
+          buttons.some(v => /上传视频|发布视频|发布作品|选择视频|重新上传|定时发布|作品描述|封面设置|发布/.test(v));
         return {
-          text,
-          hasLoginText: /扫码登录|手机号登录|验证码登录|登录抖音创作者中心/.test(text),
-          hasReadyText: /创作者服务中心|创作者中心|发布作品|上传视频|发布视频|作品管理|新的创作|数据中心/.test(text)
+          url,
+          title,
+          hasUploadInput,
+          hasLoginText: hasLoginText || hasLoginForm,
+          hasReadyText: hasReadyUi &&
+            /creator\\.douyin\\.com\\/creator-micro\\/content\\/upload/.test(url) &&
+            !(hasLoginText || hasLoginForm)
         };
       })()`,
       returnByValue: true
@@ -1241,7 +1408,7 @@ ws.addEventListener("open", async () => {
                     )
                     payload = json.loads((result.stdout or "").strip() or "{}")
                     last_payload = payload
-                    if payload.get("hasReadyText") and not payload.get("hasLoginText"):
+                    if payload.get("hasReadyText") and not payload.get("hasLoginText") and _has_required_login_cookies(platform_name, tab):
                         return True
                     time.sleep(0.3)
                 if last_payload.get("error"):
@@ -1249,6 +1416,8 @@ ws.addEventListener("open", async () => {
                 if last_payload.get("hasLoginText"):
                     return False
                 if not last_payload.get("hasReadyText"):
+                    return False
+                if not _has_required_login_cookies(platform_name, tab):
                     return False
             except Exception:
                 return False
@@ -1281,11 +1450,32 @@ ws.addEventListener("open", async () => {
     for (let i = 0; i < 3; i += 1) {
       const result = await send("Runtime.evaluate", {
         expression: `(() => {
-          const text = (document.body && document.body.innerText || '').slice(0, 4000);
+          const text = (document.body && document.body.innerText || '').slice(0, 12000);
+          const title = document.title || '';
+          const url = location.href || '';
+          const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+            .map(el => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
+            .filter(Boolean)
+            .slice(0, 120);
+          const hasUploadInput = !!document.querySelector(
+            'input[type="file"], input[accept*="video"], input[accept*="image"], [class*="upload"] input[type="file"]'
+          );
+          const loginSignals = text + '\\n' + title;
+          const hasLoginText = /短信登录|验证码登录|扫码登录|APP扫一扫登录|手机号登录|登录小红书创作服务平台|登录小红书|立即登录|同意并登录/.test(loginSignals);
+          const hasLoginForm = !!document.querySelector(
+            'input[type="tel"], input[type="password"], input[placeholder*="手机号"], input[placeholder*="验证码"], input[placeholder*="密码"]'
+          );
+          const hasReadyUi = hasUploadInput ||
+            /发布笔记|发布视频|上传视频|上传图文|写长文|创作服务平台|专业号中心|内容管理|数据中心|笔记管理|拖拽视频到此或点击上传|草稿箱/.test(text) ||
+            buttons.some(v => /发布笔记|发布视频|上传视频|上传图文|写长文|选择视频|点击上传|内容管理|草稿箱/.test(v));
           return {
-            text,
-            hasLoginText: /短信登录|验证码登录|扫码登录|APP扫一扫登录|手机号登录|登录小红书创作服务平台/.test(text),
-            hasReadyText: /发布笔记|发布视频|上传视频|创作服务平台|专业号中心|内容管理|数据中心|笔记管理/.test(text)
+            url,
+            title,
+            hasUploadInput,
+            hasLoginText: hasLoginText || hasLoginForm,
+            hasReadyText: hasReadyUi &&
+              /creator\\.xiaohongshu\\.com\\/(publish\\/publish|publish\\/notemanager|content\\/upload|creator\\/home)/.test(url) &&
+              !(hasLoginText || hasLoginForm)
           };
         })()`,
         returnByValue: true
@@ -1300,11 +1490,32 @@ ws.addEventListener("open", async () => {
     }
     const result = await send("Runtime.evaluate", {
       expression: `(() => {
-        const text = (document.body && document.body.innerText || '').slice(0, 4000);
+        const text = (document.body && document.body.innerText || '').slice(0, 12000);
+        const title = document.title || '';
+        const url = location.href || '';
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+          .map(el => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, 120);
+        const hasUploadInput = !!document.querySelector(
+          'input[type="file"], input[accept*="video"], input[accept*="image"], [class*="upload"] input[type="file"]'
+        );
+        const loginSignals = text + '\\n' + title;
+        const hasLoginText = /短信登录|验证码登录|扫码登录|APP扫一扫登录|手机号登录|登录小红书创作服务平台|登录小红书|立即登录|同意并登录/.test(loginSignals);
+        const hasLoginForm = !!document.querySelector(
+          'input[type="tel"], input[type="password"], input[placeholder*="手机号"], input[placeholder*="验证码"], input[placeholder*="密码"]'
+        );
+        const hasReadyUi = hasUploadInput ||
+          /发布笔记|发布视频|上传视频|上传图文|写长文|创作服务平台|专业号中心|内容管理|数据中心|笔记管理|拖拽视频到此或点击上传|草稿箱/.test(text) ||
+          buttons.some(v => /发布笔记|发布视频|上传视频|上传图文|写长文|选择视频|点击上传|内容管理|草稿箱/.test(v));
         return {
-          text,
-          hasLoginText: /短信登录|验证码登录|扫码登录|APP扫一扫登录|手机号登录|登录小红书创作服务平台/.test(text),
-          hasReadyText: /发布笔记|发布视频|上传视频|创作服务平台|专业号中心|内容管理|数据中心|笔记管理/.test(text)
+          url,
+          title,
+          hasUploadInput,
+          hasLoginText: hasLoginText || hasLoginForm,
+          hasReadyText: hasReadyUi &&
+            /creator\\.xiaohongshu\\.com\\/(publish\\/publish|publish\\/notemanager|content\\/upload|creator\\/home)/.test(url) &&
+            !(hasLoginText || hasLoginForm)
         };
       })()`,
       returnByValue: true
@@ -1326,7 +1537,7 @@ ws.addEventListener("open", async () => {
                     )
                     payload = json.loads((result.stdout or "").strip() or "{}")
                     last_payload = payload
-                    if payload.get("hasReadyText") and not payload.get("hasLoginText"):
+                    if payload.get("hasReadyText") and not payload.get("hasLoginText") and _has_required_login_cookies(platform_name, tab):
                         return True
                     time.sleep(0.3)
                 if last_payload.get("error"):
@@ -1335,9 +1546,59 @@ ws.addEventListener("open", async () => {
                     return False
                 if not last_payload.get("hasReadyText"):
                     return False
+                if not _has_required_login_cookies(platform_name, tab):
+                    return False
             except Exception:
                 return False
     if platform_name == "kuaishou":
+        ws_url = tab.get("webSocketDebuggerUrl") or ""
+        if ws_url:
+            try:
+                expression = r"""(() => {
+                  const text = (document.body && document.body.innerText || '').slice(0, 12000);
+                  const title = document.title || '';
+                  const url = location.href || '';
+                  const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+                    .map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim())
+                    .filter(Boolean)
+                    .slice(0, 120);
+                  const hasUploadInput = !!document.querySelector(
+                    'input[type="file"], input[accept*="video"], input[accept*="mp4"], [class*="upload"] input[type="file"]'
+                  );
+                  const loginSignals = text + '\n' + title;
+                  const hasLoginText = /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(loginSignals);
+                  const hasReadyUi = hasUploadInput ||
+                    /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布/.test(text) ||
+                    buttons.some(v => /发布作品|发布视频|上传视频|选择视频|点击上传|发布/.test(v));
+                  return {
+                    url,
+                    title,
+                    hasUploadInput,
+                    hasLoginText,
+                    hasReadyText: hasReadyUi &&
+                      /cp\.kuaishou\.com\/article\/publish/.test(url) &&
+                      !/passport\.kuaishou\.com/.test(url) &&
+                      !hasLoginText
+                  };
+                })()"""
+                last_payload = {}
+                for _ in range(3):
+                    payload = asyncio.run(_cdp_runtime_evaluate(ws_url, expression, timeout=8.0)) or {}
+                    last_payload = payload
+                    if payload.get("hasReadyText") and not payload.get("hasLoginText") and _has_required_login_cookies(platform_name, tab):
+                        return True
+                    time.sleep(0.3)
+                if last_payload.get("error"):
+                    return False
+                if last_payload.get("hasLoginText"):
+                    return False
+                if not last_payload.get("hasReadyText"):
+                    return False
+                if not _has_required_login_cookies(platform_name, tab):
+                    return False
+            except Exception:
+                return False
+    if platform_name == "shipinhao":
         ws_url = tab.get("webSocketDebuggerUrl") or ""
         if ws_url:
             try:
@@ -1370,23 +1631,25 @@ ws.addEventListener("open", async () => {
           const title = document.title || '';
           const url = location.href || '';
           const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
-            .map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim())
+            .map(el => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
             .filter(Boolean)
-            .slice(0, 60);
+            .slice(0, 120);
           const hasUploadInput = !!document.querySelector(
-            'input[type="file"], input[accept*="video"], input[accept*="mp4"], [class*="upload"] input[type="file"]'
+            'input[type="file"], input[accept*="video"], [class*="upload"] input[type="file"]'
           );
+          const loginSignals = text + '\\n' + title;
+          const hasLoginText = /微信扫码|扫码登录|请使用微信扫码|登录后继续|登录后可继续|请先登录/.test(loginSignals);
           const hasReadyUi = hasUploadInput ||
-            /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布/.test(text) ||
-            buttons.some(v => /发布作品|发布视频|上传视频|选择视频|点击上传|发布/.test(v));
+            /发表视频|上传视频|拖拽|选择视频|视频描述|扩展链接|首页|内容管理|草稿箱|数据中心|视频号 · 助手/.test(text) ||
+            buttons.some(v => /发表视频|上传视频|选择视频|内容管理|草稿箱|数据中心/.test(v));
           return {
             url,
             title,
             hasUploadInput,
-            hasLoginText: /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title),
-            hasReadyText: hasReadyUi && /cp\.kuaishou\.com\/article\/publish/.test(url) &&
-              !/passport\.kuaishou\.com/.test(url) &&
-              !/扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title)
+            hasLoginText,
+            hasReadyText: hasReadyUi &&
+              /channels\\.weixin\\.qq\\.com\\/platform\\/post\\/create/.test(url) &&
+              !hasLoginText
           };
         })()`,
         returnByValue: true
@@ -1405,23 +1668,25 @@ ws.addEventListener("open", async () => {
         const title = document.title || '';
         const url = location.href || '';
         const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
-          .map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim())
+          .map(el => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
           .filter(Boolean)
-          .slice(0, 60);
+          .slice(0, 120);
         const hasUploadInput = !!document.querySelector(
-          'input[type="file"], input[accept*="video"], input[accept*="mp4"], [class*="upload"] input[type="file"]'
+          'input[type="file"], input[accept*="video"], [class*="upload"] input[type="file"]'
         );
+        const loginSignals = text + '\\n' + title;
+        const hasLoginText = /微信扫码|扫码登录|请使用微信扫码|登录后继续|登录后可继续|请先登录/.test(loginSignals);
         const hasReadyUi = hasUploadInput ||
-          /发布作品|发布视频|上传视频|上传图文|上传全景视频|拖拽视频到此或点击上传|作品描述|封面设置|定时发布/.test(text) ||
-          buttons.some(v => /发布作品|发布视频|上传视频|选择视频|点击上传|发布/.test(v));
+          /发表视频|上传视频|拖拽|选择视频|视频描述|扩展链接|首页|内容管理|草稿箱|数据中心|视频号 · 助手/.test(text) ||
+          buttons.some(v => /发表视频|上传视频|选择视频|内容管理|草稿箱|数据中心/.test(v));
         return {
           url,
           title,
           hasUploadInput,
-          hasLoginText: /扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title),
-          hasReadyText: hasReadyUi && /cp\.kuaishou\.com\/article\/publish/.test(url) &&
-            !/passport\.kuaishou\.com/.test(url) &&
-            !/扫码登录|验证码登录|短信登录|登录快手创作者服务平台|手机号登录|账号登录|请完成验证后继续访问|同意并登录|快手APP扫码/.test(text + '\n' + title)
+          hasLoginText,
+          hasReadyText: hasReadyUi &&
+            /channels\\.weixin\\.qq\\.com\\/platform\\/post\\/create/.test(url) &&
+            !hasLoginText
         };
       })()`,
       returnByValue: true
@@ -1443,7 +1708,7 @@ ws.addEventListener("open", async () => {
                     )
                     payload = json.loads((result.stdout or "").strip() or "{}")
                     last_payload = payload
-                    if payload.get("hasReadyText") and not payload.get("hasLoginText"):
+                    if payload.get("hasReadyText") and not payload.get("hasLoginText") and _has_required_login_cookies(platform_name, tab):
                         return True
                     time.sleep(0.3)
                 if last_payload.get("error"):
@@ -1452,96 +1717,10 @@ ws.addEventListener("open", async () => {
                     return False
                 if not last_payload.get("hasReadyText"):
                     return False
-            except Exception:
-                return False
-        return False
-    if platform_name == "shipinhao":
-        ws_url = tab.get("webSocketDebuggerUrl") or ""
-        if ws_url:
-            try:
-                node_script = r"""
-const wsUrl = process.argv[1];
-const ws = new WebSocket(wsUrl);
-let id = 0;
-function send(method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const msgId = ++id;
-    const onMessage = (ev) => {
-      const data = JSON.parse(ev.data);
-      if (data.id === msgId) {
-        ws.removeEventListener("message", onMessage);
-        if (data.error) reject(data.error);
-        else resolve(data.result);
-      }
-    };
-    ws.addEventListener("message", onMessage);
-    ws.send(JSON.stringify({ id: msgId, method, params }));
-  });
-}
-ws.addEventListener("open", async () => {
-  try {
-    await send("Runtime.enable");
-    for (let i = 0; i < 3; i += 1) {
-      const result = await send("Runtime.evaluate", {
-        expression: `(() => {
-          const text = (document.body && document.body.innerText || '').slice(0, 4000);
-          return {
-            text,
-            hasLoginText: /微信扫码|扫码登录|请使用微信扫码/.test(text),
-            hasReadyText: /发表视频|上传视频|拖拽|选择视频|视频描述|扩展链接|首页|内容管理|草稿箱|数据中心|视频号 · 助手/.test(text)
-          };
-        })()`,
-        returnByValue: true
-      });
-      const payload = result.result.value || {};
-      if (payload.hasReadyText && !payload.hasLoginText) {
-        console.log(JSON.stringify(payload));
-        ws.close();
-        return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    const result = await send("Runtime.evaluate", {
-      expression: `(() => {
-        const text = (document.body && document.body.innerText || '').slice(0, 4000);
-        return {
-          text,
-          hasLoginText: /微信扫码|扫码登录|请使用微信扫码/.test(text),
-          hasReadyText: /发表视频|上传视频|拖拽|选择视频|视频描述|扩展链接|首页|内容管理|草稿箱|数据中心|视频号 · 助手/.test(text)
-        };
-      })()`,
-      returnByValue: true
-    });
-    console.log(JSON.stringify(result.result.value || {}));
-  } catch (e) {
-    console.log(JSON.stringify({ error: String(e) }));
-  }
-  ws.close();
-});
-"""
-                last_payload = {}
-                for _ in range(3):
-                    result = subprocess.run(
-                        ["node", "-e", node_script, ws_url],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    payload = json.loads((result.stdout or "").strip() or "{}")
-                    last_payload = payload
-                    if payload.get("hasReadyText") and not payload.get("hasLoginText"):
-                        return True
-                    time.sleep(0.3)
-                if last_payload.get("error"):
-                    return False
-                if last_payload.get("hasLoginText"):
-                    return False
-                if not last_payload.get("hasReadyText"):
+                if not _has_required_login_cookies(platform_name, tab):
                     return False
             except Exception:
                 return False
-    if platform_name == "kuaishou":
-        return False
     markers = tuple(m.lower() for m in PLATFORMS[platform_name]["login_markers"])
     return not any(marker in url for marker in markers)
 
@@ -1625,6 +1804,7 @@ def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[
 def ensure_platform_login(
     platform_name: str,
     timeout: int = 300,
+    notify_wechat: bool = False,
 ) -> tuple[bool, str]:
     root = project_root()
     cfg = PLATFORMS[platform_name]
@@ -1643,6 +1823,11 @@ def ensure_platform_login(
     screenshot_path = capture_login_screenshot(platform_name, root)
     if screenshot_path:
         print(f"{cfg['label']} 登录二维码已保存：{screenshot_path}")
+        if notify_wechat:
+            if send_wechat_notification(platform_name, screenshot_path):
+                print(f"{cfg['label']} 登录二维码已发送到微信")
+            else:
+                print(f"{cfg['label']} 登录二维码发送到微信失败")
     else:
         print(f"{cfg['label']} 登录页已打开，但本次未提取到二维码图片")
     last_qr_refresh = time.time()
@@ -1662,9 +1847,11 @@ def ensure_platform_login(
 
 
 def _main() -> int:
-    parser = argparse.ArgumentParser(description="四平台 connect 登录助手（auth skill 版）")
-    parser.add_argument("--platform", required=True, choices=sorted(PLATFORMS), help="目标平台")
+    parser = argparse.ArgumentParser(description="四平台 connect 登录助手（auth skill 版，单次只处理一个平台）")
+    parser.add_argument("--platform", required=True, choices=sorted(PLATFORMS), help="目标平台；一次只允许一个")
     parser.add_argument("--check-only", action="store_true", help="仅检查当前登录是否可复用")
+    parser.add_argument("--close-after-check", action="store_true", help="仅检查时在返回结果后关闭当前平台 connect Chrome")
+    parser.add_argument("--notify-wechat", action="store_true", help="登录页打开后把二维码发送到微信")
     parser.add_argument("--timeout", type=int, default=300, help="等待登录超时时间（秒）")
     parser.add_argument("--project-root", default="", help="项目根目录；不传则默认取当前仓库")
     args = parser.parse_args()
@@ -1675,10 +1862,14 @@ def _main() -> int:
 
     if args.check_only:
         ok, msg = check_platform_login(args.platform)
+        if args.close_after_check:
+            closed = close_connect_browser(args.platform)
+            msg = f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 已关闭" if closed else f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 未关闭（可能本来就未启动）"
     else:
         ok, msg = ensure_platform_login(
             args.platform,
             timeout=args.timeout,
+            notify_wechat=args.notify_wechat,
         )
 
     print(msg)
