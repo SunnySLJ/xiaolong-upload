@@ -80,7 +80,7 @@ def main() -> int:
     for platform, ps1, title, desc, tags, label in JOBS:
         script = _SCRIPTS / ps1
         safe_print(f"========== [{label}] ==========")
-        login_ok, login_msg = check_platform_login(platform, _ROOT)
+        login_ok, login_msg = check_platform_login(platform, _ROOT, passive=True)
         safe_print(f"[{label}] 登录检查: {login_msg}")
         if not login_ok:
             safe_print(login_instruction(platform, _ROOT), flush=True)

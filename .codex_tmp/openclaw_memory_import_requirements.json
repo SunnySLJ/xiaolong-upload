@@ -1,0 +1,53 @@
+{
+  "version": "1.0",
+  "exportedAt": "2026-03-30T10:05:00.000Z",
+  "count": 5,
+  "filters": {},
+  "memories": [
+    {
+      "id": "user-workflow-overview-20260330",
+      "text": "User's OpenClaw workflow has four core functions: generate video from multiple uploaded images, verify login status for Douyin/Kuaishou/Xiaohongshu/WeChat Channels and generate QR codes when login is missing or expired, publish generated videos to the logged-in platforms, and manage dedicated input/output folders with weekly cleanup every Monday morning.",
+      "category": "fact",
+      "scope": "global",
+      "importance": 0.98,
+      "timestamp": 1774865100000,
+      "metadata": "{\"source\":\"manual_import\",\"lang\":\"zh-CN\",\"topic\":\"workflow\"}"
+    },
+    {
+      "id": "user-video-generation-from-images-20260330",
+      "text": "When users send multiple images, use the existing image-to-video skill to generate a video.",
+      "category": "fact",
+      "scope": "global",
+      "importance": 0.96,
+      "timestamp": 1774865100001,
+      "metadata": "{\"source\":\"manual_import\",\"lang\":\"zh-CN\",\"topic\":\"video_generation\"}"
+    },
+    {
+      "id": "user-platform-login-check-and-qr-20260330",
+      "text": "Before publishing, check login status for Douyin, Kuaishou, Xiaohongshu, and WeChat Channels. If not logged in or session expired, use the existing auth skill to generate a login QR code into a designated directory.",
+      "category": "fact",
+      "scope": "global",
+      "importance": 0.99,
+      "timestamp": 1774865100002,
+      "metadata": "{\"source\":\"manual_import\",\"lang\":\"zh-CN\",\"topic\":\"auth_workflow\"}"
+    },
+    {
+      "id": "user-video-publishing-workflow-20260330",
+      "text": "If a platform login is valid and the user asks to publish a video, use the existing publishing skill to upload and publish the video to Douyin, Kuaishou, Xiaohongshu, and WeChat Channels as requested.",
+      "category": "fact",
+      "scope": "global",
+      "importance": 0.97,
+      "timestamp": 1774865100003,
+      "metadata": "{\"source\":\"manual_import\",\"lang\":\"zh-CN\",\"topic\":\"publishing_workflow\"}"
+    },
+    {
+      "id": "user-dedicated-folders-and-weekly-cleanup-20260330",
+      "text": "Maintain a dedicated directory for uploaded images, a dedicated directory for generated videos, and clean those folders every Monday morning.",
+      "category": "fact",
+      "scope": "global",
+      "importance": 0.95,
+      "timestamp": 1774865100004,
+      "metadata": "{\"source\":\"manual_import\",\"lang\":\"zh-CN\",\"topic\":\"file_management\"}"
+    }
+  ]
+}

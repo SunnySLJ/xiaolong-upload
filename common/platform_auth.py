@@ -23,9 +23,13 @@ def _load_auth_module():
 _AUTH = _load_auth_module()
 
 
-def check_platform_login(platform_name: str, project_root: Path | None = None) -> tuple[bool, str]:
+def check_platform_login(
+    platform_name: str,
+    project_root: Path | None = None,
+    passive: bool = False,
+) -> tuple[bool, str]:
     root = project_root or PROJECT_ROOT
-    return _AUTH.check_platform_login(platform_name, root)
+    return _AUTH.check_platform_login(platform_name, root, passive=passive)
 
 
 def ensure_platform_login(

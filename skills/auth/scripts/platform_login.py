@@ -149,20 +149,28 @@ def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
 
 def close_connect_browser(platform_name: str, timeout: float = 8.0) -> bool:
     port = PLATFORMS[platform_name]["port"]
+    # 使用 ps 命令查找 Chrome 主进程（不是 renderer 子进程）
     try:
         result = subprocess.run(
-            ["lsof", "-tiTCP:%d" % port, "-sTCP:LISTEN"],
+            ["ps", "aux"],
             capture_output=True,
             text=True,
             timeout=3,
         )
     except Exception:
         return False
+    
     pids = []
     for line in (result.stdout or "").splitlines():
-        line = line.strip()
-        if line.isdigit():
-            pids.append(int(line))
+        # 查找包含 remote-debugging-port=PORT 的 Chrome 主进程
+        if f"--remote-debugging-port={port}" in line and "Google Chrome.app/Contents/MacOS/Google Chrome" in line:
+            # 跳过 Renderer  helper 进程
+            if "Helper" in line:
+                continue
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                pids.append(int(parts[1]))
+    
     if not pids:
         return False
     for pid in sorted(set(pids)):
@@ -1769,7 +1777,90 @@ def _post_revival_stabilize(platform_name: str) -> None:
     time.sleep(2.0)
 
 
-def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[bool, str]:
+def auto_recover_session(
+    platform_name: str,
+    root: Path | None = None,
+    timeout: float = 15.0,
+) -> tuple[bool, str]:
+    """
+    自动恢复平台会话
+    当 check_platform_login 返回 False 时调用此函数尝试恢复
+    流程：启动 Chrome → 打开目标页 → 等待就绪
+    返回：(是否成功，消息)
+    """
+    root = root or project_root()
+    cfg = PLATFORMS[platform_name]
+    label = cfg["label"]
+    
+    # 检查 profile 目录是否存在
+    profile_dir = profile_dir_for(platform_name, root)
+    if not profile_dir.exists():
+        return False, f"{label} 还没有登录目录，需要先扫码登录"
+    
+    # 检查端口是否监听
+    if is_port_listening(cfg["port"]):
+        # 端口已监听，只需打开目标页面
+        tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
+        if tabs:
+            for tab in tabs:
+                if _tab_is_logged_in(platform_name, tab):
+                    return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
+        # 打开目标页面
+        open_target_tab(platform_name)
+        time.sleep(2)
+        tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
+        if tabs:
+            for tab in tabs:
+                if _tab_is_logged_in(platform_name, tab):
+                    return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
+        return False, f"{label} 端口已监听但未找到已登录页面"
+    
+    # 端口未监听，需要启动 Chrome
+    print(f"   🔄 {label} 端口 {cfg['port']} 未监听，正在启动 Chrome...")
+    try:
+        launch_connect_chrome(platform_name, root)
+    except Exception as e:
+        return False, f"{label} 启动 Chrome 失败：{e}"
+    
+    # 等待端口监听
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_port_listening(cfg["port"]):
+            break
+        time.sleep(0.3)
+    else:
+        return False, f"{label} 启动 Chrome 后端口仍未监听"
+    
+    # 打开目标页面
+    print(f"   📑 打开 {label} 目标页面...")
+    open_target_tab(platform_name)
+    time.sleep(3)
+    
+    # 检查页面是否就绪
+    tabs = ensure_page_target(platform_name, retries=3, wait_seconds=1.0)
+    if not tabs:
+        return False, f"{label} 无法打开目标页面"
+    
+    # 检查是否已登录
+    for tab in tabs:
+        if _tab_is_logged_in(platform_name, tab):
+            return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
+    
+    # 页面已打开但可能还在加载，等待一下再检查
+    time.sleep(2)
+    tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
+    for tab in tabs:
+        if _tab_is_logged_in(platform_name, tab):
+            return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
+    
+    return False, f"{label} 页面已打开但检测到未登录状态"
+
+
+def check_platform_login(
+    platform_name: str,
+    root: Path | None = None,
+    passive: bool = False,
+) -> tuple[bool, str]:
     root = root or project_root()
     cfg = PLATFORMS[platform_name]
     profile_dir = profile_dir_for(platform_name, root)
@@ -1777,6 +1868,8 @@ def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[
     if not is_port_listening(cfg["port"]):
         if not profile_dir.exists():
             return False, f"{cfg['label']} 还没有登录目录: {profile_dir}"
+        # profile 目录存在，说明之前登录过，尝试启动 Chrome 检查 cookies
+        # 注意：即使 passive=True 也会启动，因为"浏览器没开"≠"登录失效"
         tabs = _revive_connect_session_for_check(platform_name, root)
         if not tabs:
             return False, f"{cfg['label']} connect 端口 {cfg['port']} 未监听，且无法恢复本地会话"
@@ -1784,8 +1877,10 @@ def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[
         tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
         revived = True
     else:
-        tabs = ensure_page_target(platform_name)
+        tabs = devtools_tabs(cfg["port"]) if passive else ensure_page_target(platform_name)
     if not tabs:
+        if passive:
+            return False, f"{cfg['label']} connect Chrome 当前没有可复用标签页"
         return False, f"{cfg['label']} connect Chrome 没有可复用标签页"
     for tab in tabs:
         if _tab_is_logged_in(platform_name, tab):
@@ -1793,6 +1888,8 @@ def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[
                 return True, f"{cfg['label']} 已登录，可复用外部 connect 会话: {tab.get('url', '')}"
             suffix = "（已自动恢复本地会话）" if revived else ""
             return True, f"{cfg['label']} 已登录，可复用{suffix}: {tab.get('url', '')}"
+    if passive:
+        return False, f"{cfg['label']} 当前未发现可直接复用的已登录页面"
     open_target_tab(platform_name)
     time.sleep(1)
     for tab in ensure_page_target(platform_name, retries=1):
@@ -1862,9 +1959,9 @@ def _main() -> int:
 
     if args.check_only:
         ok, msg = check_platform_login(args.platform)
-        if args.close_after_check:
-            closed = close_connect_browser(args.platform)
-            msg = f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 已关闭" if closed else f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 未关闭（可能本来就未启动）"
+        # 检测完自动关闭浏览器
+        closed = close_connect_browser(args.platform)
+        msg = f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 已关闭" if closed else f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 未关闭（可能本来就未启动）"
     else:
         ok, msg = ensure_platform_login(
             args.platform,

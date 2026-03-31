@@ -87,7 +87,7 @@ def main() -> int:
         safe_print(f"文案: {content['description']}")
         safe_print(f"标签: {', '.join(content['tags'])}")
 
-        login_ok, login_msg = check_platform_login(platform, _ROOT)
+        login_ok, login_msg = check_platform_login(platform, _ROOT, passive=True)
         safe_print(f"登录检查: {login_msg}")
         if not login_ok:
             safe_print(login_instruction(platform, _ROOT))

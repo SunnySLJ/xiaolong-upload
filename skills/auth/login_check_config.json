@@ -1,0 +1,43 @@
+{
+  "_comment": "登录状态检查配置 - 控制每日定时登录检查的行为",
+  
+  "enabled": true,
+  "_comment_enabled": "是否启用定时检查",
+  
+  "daily_check_time": "10:10",
+  "_comment_daily_check_time": "每日检查时间（24 小时制，格式：HH:MM）",
+  
+  "timezone": "Asia/Shanghai",
+  "_comment_timezone": "时区设置",
+  
+  "platforms": [
+    "douyin",
+    "xiaohongshu",
+    "kuaishou",
+    "shipinhao"
+  ],
+  "_comment_platforms": "需要检查的平台列表：douyin(抖音), xiaohongshu(小红书), kuaishou(快手), shipinhao(视频号)",
+  
+  "check_order": [
+    "douyin",
+    "xiaohongshu",
+    "kuaishou",
+    "shipinhao"
+  ],
+  "_comment_check_order": "检查顺序，按顺序逐个检查",
+  
+  "notify_on_failure": true,
+  "_comment_notify_on_failure": "登录失效时是否发送通知",
+  
+  "notify_channel": "wechat",
+  "_comment_notify_channel": "通知渠道：wechat, feishu",
+  
+  "auto_retry_login": true,
+  "_comment_auto_retry_login": "是否自动尝试恢复登录会话（重启浏览器等）",
+  
+  "qr_code_notify": true,
+  "_comment_qr_code_notify": "自动恢复失败时是否发送二维码让用户扫码",
+  
+  "close_browser_after_check": true,
+  "_comment_close_browser_after_check": "检查完成后是否自动关闭 Chrome 浏览器（节省资源）"
+}

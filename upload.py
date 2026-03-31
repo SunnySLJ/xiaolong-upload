@@ -21,6 +21,12 @@ from common.python_runtime import ensure_preferred_python_3_11
 from common.platform_auth import check_platform_login, ensure_platform_login
 from common.console import ensure_console_ready, safe_print
 
+# 导入关闭浏览器函数
+try:
+    from skills.auth.scripts.platform_login import close_connect_browser
+except ImportError:
+    close_connect_browser = None
+
 ensure_preferred_python_3_11()
 ensure_console_ready()
 
@@ -129,7 +135,7 @@ def upload(
             notify_wechat=notify_login_wechat,
         )
     else:
-        ok, msg = check_platform_login(platform, project_root=_PROJECT_ROOT)
+        ok, msg = check_platform_login(platform, project_root=_PROJECT_ROOT, passive=True)
     if not ok:
         safe_print(f"错误: {msg}")
         return False
@@ -150,7 +156,16 @@ def upload(
         handle_login=False,
     )
     
-        # 发布成功后不再移动视频，由用户每周定时任务统一清理
+    # 发布成功后关闭浏览器（2026-03-31 更新）
+    if ok and close_connect_browser:
+        safe_print(f"✓ {platform} 发布成功，关闭浏览器...")
+        try:
+            close_connect_browser(platform)
+            safe_print(f"✓ {platform} 浏览器已关闭")
+        except Exception as e:
+            safe_print(f"⚠ 关闭浏览器失败：{e}")
+    
+    # 发布成功后不再移动视频，由用户每周定时任务统一清理
     # published_dir 仅作为历史参考，新视频保留在原始位置
     
     return ok

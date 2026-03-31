@@ -28,10 +28,10 @@ def _load_auth_module():
 _AUTH = _load_auth_module()
 
 
-def check_platform_login(platform_name: str, root: Path | None = None):
+def check_platform_login(platform_name: str, root: Path | None = None, passive: bool = False):
     actual_root = (root or PROJECT_ROOT).resolve()
     _AUTH._PROJECT_ROOT_OVERRIDE = actual_root
-    return _AUTH.check_platform_login(platform_name, actual_root)
+    return _AUTH.check_platform_login(platform_name, actual_root, passive=passive)
 
 
 def ensure_platform_login(
