@@ -111,6 +111,14 @@ PLATFORMS = {
     },
 }
 
+# 本地登录检查入口当前只保留视频号；其他平台实现先保留，不在入口暴露。
+CLI_PLATFORMS = (
+    # "douyin",
+    # "xiaohongshu",
+    # "kuaishou",
+    "shipinhao",
+)
+
 _PROJECT_ROOT_OVERRIDE: Path | None = None
 
 
@@ -238,18 +246,18 @@ async def _cdp_runtime_evaluate(ws_url: str, expression: str, timeout: float = 5
                 return msg.get("result", {}).get("result", {}).get("value")
 
 
-def _has_required_login_cookies(platform_name: str, tab: dict) -> bool:
+def _has_required_login_cookies(platform_name: str, tab: dict, base_url: str | None = None) -> bool:
     cfg = PLATFORMS[platform_name]
     cookie_names = tuple(cfg.get("required_cookie_names", ()))
     min_hits = int(cfg.get("required_cookie_hits", 0) or 0)
     if not cookie_names or min_hits <= 0:
         return True
     ws_url = tab.get("webSocketDebuggerUrl") or ""
-    base_url = tab.get("url") or cfg["url"]
-    if not ws_url or not base_url:
+    cookie_url = base_url or tab.get("url") or cfg["url"]
+    if not ws_url or not cookie_url:
         return False
     try:
-        cookies = asyncio.run(_cdp_fetch_cookies(ws_url, base_url, timeout=5.0))
+        cookies = asyncio.run(_cdp_fetch_cookies(ws_url, cookie_url, timeout=5.0))
     except Exception:
         return False
     names = {
@@ -259,6 +267,15 @@ def _has_required_login_cookies(platform_name: str, tab: dict) -> bool:
     }
     hits = sum(1 for name in cookie_names if name in names)
     return hits >= min_hits
+
+
+def _find_reusable_session_by_cookies(platform_name: str, tabs: list[dict]) -> dict | None:
+    cfg = PLATFORMS[platform_name]
+    page_tabs = [tab for tab in tabs if tab.get("type") == "page"]
+    for tab in page_tabs:
+        if _has_required_login_cookies(platform_name, tab, base_url=cfg["url"]):
+            return tab
+    return None
 
 
 def ensure_page_target(platform_name: str, retries: int = 3, wait_seconds: float = 1.0) -> list[dict]:
@@ -275,10 +292,14 @@ def ensure_page_target(platform_name: str, retries: int = 3, wait_seconds: float
     return tabs
 
 
-def open_target_tab(platform_name: str) -> bool:
+def open_target_tab(platform_name: str, force_new: bool = False) -> bool:
+    """打开目标平台标签页
+    
+    :param force_new: 是否强制打开新标签页（即使已有标签页存在）
+    """
     port = PLATFORMS[platform_name]["port"]
     tabs = devtools_tabs(port)
-    if any(tab.get("type") == "page" for tab in tabs):
+    if not force_new and any(tab.get("type") == "page" for tab in tabs):
         return False
     url = PLATFORMS[platform_name]["url"]
     encoded = urllib.parse.quote(url, safe=":/?&=%")
@@ -1889,6 +1910,10 @@ def check_platform_login(
             suffix = "（已自动恢复本地会话）" if revived else ""
             return True, f"{cfg['label']} 已登录，可复用{suffix}: {tab.get('url', '')}"
     if passive:
+        cookie_tab = _find_reusable_session_by_cookies(platform_name, tabs)
+        if cookie_tab:
+            cookie_url = cookie_tab.get("url") or ""
+            return True, f"{cfg['label']} 已检测到本地可复用会话 cookie: {cookie_url}"
         return False, f"{cfg['label']} 当前未发现可直接复用的已登录页面"
     open_target_tab(platform_name)
     time.sleep(1)
@@ -1896,6 +1921,56 @@ def check_platform_login(
         if _tab_is_logged_in(platform_name, tab):
             return True, f"{cfg['label']} 已登录，可复用: {tab.get('url', '')}"
     return False, f"{cfg['label']} 当前仍停在登录页"
+
+
+def force_platform_login(
+    platform_name: str,
+    timeout: int = 300,
+    notify_wechat: bool = False,
+) -> tuple[bool, str]:
+    """强制重新登录，跳过检查直接打开登录页获取二维码"""
+    root = project_root()
+    cfg = PLATFORMS[platform_name]
+    
+    # 确保浏览器已启动
+    if not is_port_listening(cfg["port"]):
+        launch_connect_chrome(platform_name, root)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if is_port_listening(cfg["port"]):
+                break
+            time.sleep(0.25)
+    
+    # 打开登录页（强制打开，不复用现有标签页）
+    open_target_tab(platform_name, force_new=True)
+    
+    # 获取二维码截图
+    time.sleep(2)  # 等待页面加载
+    screenshot_path = capture_login_screenshot(platform_name, root)
+    if screenshot_path:
+        print(f"{cfg['label']} 登录二维码已保存：{screenshot_path}")
+        if notify_wechat:
+            if send_wechat_notification(platform_name, screenshot_path):
+                print(f"{cfg['label']} 登录二维码已发送到微信")
+            else:
+                print(f"{cfg['label']} 登录二维码发送到微信失败")
+    else:
+        print(f"{cfg['label']} 登录页已打开，但本次未提取到二维码图片")
+    
+    last_qr_refresh = time.time()
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        ok, msg = check_platform_login(platform_name, root)
+        if ok:
+            return True, msg
+        if time.time() - last_qr_refresh >= 120:
+            screenshot_path = capture_login_screenshot(platform_name, root)
+            if screenshot_path:
+                print(f"{cfg['label']} 登录二维码已刷新：{screenshot_path}")
+            last_qr_refresh = time.time()
+        time.sleep(3)
+    return False, f"{cfg['label']} 登录超时，请稍后重试"
 
 
 def ensure_platform_login(
@@ -1945,10 +2020,11 @@ def ensure_platform_login(
 
 def _main() -> int:
     parser = argparse.ArgumentParser(description="四平台 connect 登录助手（auth skill 版，单次只处理一个平台）")
-    parser.add_argument("--platform", required=True, choices=sorted(PLATFORMS), help="目标平台；一次只允许一个")
+    parser.add_argument("--platform", required=True, choices=CLI_PLATFORMS, help="目标平台；当前入口只保留视频号")
     parser.add_argument("--check-only", action="store_true", help="仅检查当前登录是否可复用")
     parser.add_argument("--close-after-check", action="store_true", help="仅检查时在返回结果后关闭当前平台 connect Chrome")
     parser.add_argument("--notify-wechat", action="store_true", help="登录页打开后把二维码发送到微信")
+    parser.add_argument("--force-login", action="store_true", help="强制重新登录，跳过检查直接打开登录页")
     parser.add_argument("--timeout", type=int, default=300, help="等待登录超时时间（秒）")
     parser.add_argument("--project-root", default="", help="项目根目录；不传则默认取当前仓库")
     args = parser.parse_args()
@@ -1962,6 +2038,13 @@ def _main() -> int:
         # 检测完自动关闭浏览器
         closed = close_connect_browser(args.platform)
         msg = f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 已关闭" if closed else f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 未关闭（可能本来就未启动）"
+    elif args.force_login:
+        # 强制重新登录，跳过检查
+        ok, msg = force_platform_login(
+            args.platform,
+            timeout=args.timeout,
+            notify_wechat=args.notify_wechat,
+        )
     else:
         ok, msg = ensure_platform_login(
             args.platform,

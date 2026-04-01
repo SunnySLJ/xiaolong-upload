@@ -9,11 +9,11 @@ import sys
 from pathlib import Path
 
 
-PREFERRED_MAC_PYTHON = Path("/opt/homebrew/bin/python3.11")
+PREFERRED_MAC_PYTHON = Path("/opt/homebrew/bin/python3.12")
 
 
 def ensure_preferred_python_3_11() -> None:
-    """在 macOS 下优先重进到 /opt/homebrew/bin/python3.11。"""
+    """在 macOS 下优先重进到 /opt/homebrew/bin/python3.12。"""
     if os.environ.get("XIAOLONG_PYTHON_LOCK") == "1":
         return
     if platform.system() != "Darwin":

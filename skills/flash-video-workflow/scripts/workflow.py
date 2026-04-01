@@ -181,7 +181,7 @@ def download_video(task_id, video_url):
 def check_platform_login(platform):
     """检查平台登录状态"""
     cmd = [
-        "/opt/homebrew/bin/python3.11",
+        "/opt/homebrew/bin/python3.12",
         str(AUTH_SCRIPT),
         "--platform", platform,
         "--check-only"
@@ -194,7 +194,7 @@ def check_platform_login(platform):
 def get_platform_qr(platform):
     """获取平台登录二维码"""
     cmd = [
-        "/opt/homebrew/bin/python3.11",
+        "/opt/homebrew/bin/python3.12",
         str(AUTH_SCRIPT),
         "--platform", platform,
         "--notify-wechat"
@@ -210,7 +210,7 @@ def get_platform_qr(platform):
 def upload_video(platform, video_path, title, caption, tags):
     """上传视频到指定平台"""
     cmd = [
-        "/opt/homebrew/bin/python3.11",
+        "/opt/homebrew/bin/python3.12",
         str(UPLOAD_SCRIPT),
         "-p", platform,
         video_path,

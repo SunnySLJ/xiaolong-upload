@@ -6,7 +6,7 @@
 用法:
   python upload.py --platform <平台> <视频路径> [标题] [文案] [标签]
 
-平台: douyin | kuaishou | shipinhao | xiaohongshu
+平台: shipinhao
 """
 from __future__ import annotations
 
@@ -40,6 +40,14 @@ PLATFORMS = (
     "kuaishou",
     "shipinhao",
     "xiaohongshu",
+)
+
+# 本地 CLI 入口当前只保留视频号；其他平台实现先保留，不在入口暴露。
+CLI_PLATFORMS = (
+    # "douyin",
+    # "kuaishou",
+    "shipinhao",
+    # "xiaohongshu",
 )
 
 
@@ -105,6 +113,7 @@ def upload(
     handle_login: bool = True,
     notify_login_wechat: bool = False,
     login_only: bool = False,
+    close_browser: bool = True,  # 发布成功后是否关闭浏览器（多平台批量上传时设为 False）
 ) -> bool:
     """
     统一上传入口
@@ -157,7 +166,8 @@ def upload(
     )
     
     # 发布成功后关闭浏览器（2026-03-31 更新）
-    if ok and close_connect_browser:
+    # close_browser=False 时由调用方统一关闭（用于多平台批量上传）
+    if ok and close_connect_browser and close_browser:
         safe_print(f"✓ {platform} 发布成功，关闭浏览器...")
         try:
             close_connect_browser(platform)
@@ -179,12 +189,10 @@ def _main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python upload.py --platform douyin /path/video.mp4 "标题" "文案" "标签1,标签2"
-  python upload.py --platform xiaohongshu video.mp4 "标题"
   python upload.py --platform shipinhao video.mp4 "标题" "文案"
         """,
     )
-    parser.add_argument("--platform", "-p", required=True, choices=PLATFORMS, help="目标平台")
+    parser.add_argument("--platform", "-p", required=True, choices=CLI_PLATFORMS, help="目标平台")
     parser.add_argument("video_path", help="视频文件路径")
     parser.add_argument("title", nargs="?", default="", help="标题")
     parser.add_argument("description", nargs="?", default="", help="文案")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Upload Desktop\\2.mp4 to Douyin / XHS / Kuaishou / Shipinhao with generated copy."""
+"""Upload Desktop\\2.mp4 to Shipinhao with generated copy."""
 from __future__ import annotations
 
 import subprocess
@@ -19,32 +19,8 @@ from platform_login import check_platform_login, login_instruction
 ensure_console_ready()
 
 # Per platform limits:
-# DY title<=30; XHS title<=20 tags<=5; KS title<=15 tags<=4; SPH title<=64 tags<=10
+# DY title<=30; KS title<=15 tags<=4; SPH title<=64 tags<=10; XHS title<=20 tags<=5
 JOBS: list[tuple[str, str, str, str, str, str]] = [
-    (
-        "douyin",
-        "upload_douyin_connect.ps1",
-        "今日份生活小记录",
-        "把今天的片段收进这支小视频里，平凡里也有一点甜。愿你看完能放松片刻，评论区聊聊你的感受～",
-        "生活记录,日常分享,美好时光,vlog",
-        "抖音",
-    ),
-    (
-        "xiaohongshu",
-        "upload_xiaohongshu_connect.ps1",
-        "今日份生活小记录",
-        "把今天的片段收进这支小视频里，平凡里也有一点甜。愿你看完能放松片刻，评论区聊聊你的感受～",
-        "生活记录,日常分享,美好时光,vlog,小确幸",
-        "小红书",
-    ),
-    (
-        "kuaishou",
-        "upload_kuaishou_connect.ps1",
-        "记录生活小确幸",
-        "把今天的片段剪成短视频，记录平凡里的小美好。喜欢的话点个赞～",
-        "生活记录,日常分享,美好时光,vlog",
-        "快手",
-    ),
     (
         "shipinhao",
         "upload_shipinhao_connect.ps1",
@@ -53,6 +29,30 @@ JOBS: list[tuple[str, str, str, str, str, str]] = [
         "生活记录,日常分享,美好时光,vlog,小确幸,随手拍",
         "视频号",
     ),
+    # (
+    #     "douyin",
+    #     "upload_douyin_connect.ps1",
+    #     "今日份生活小记录",
+    #     "把今天的片段收进这支小视频里，平凡里也有一点甜。愿你看完能放松片刻，评论区聊聊你的感受～",
+    #     "生活记录,日常分享,美好时光,vlog",
+    #     "抖音",
+    # ),
+    # (
+    #     "kuaishou",
+    #     "upload_kuaishou_connect.ps1",
+    #     "记录生活小确幸",
+    #     "把今天的片段剪成短视频，记录平凡里的小美好。喜欢的话点个赞～",
+    #     "生活记录,日常分享,美好时光,vlog",
+    #     "快手",
+    # ),
+    # (
+    #     "xiaohongshu",
+    #     "upload_xiaohongshu_connect.ps1",
+    #     "今日份生活小记录",
+    #     "把今天的片段收进这支小视频里，平凡里也有一点甜。愿你看完能放松片刻，评论区聊聊你的感受～",
+    #     "生活记录,日常分享,美好时光,vlog,小确幸",
+    #     "小红书",
+    # ),
 ]
 
 
@@ -62,7 +62,7 @@ def main() -> int:
         safe_print(f"视频不存在: {video}")
         return 1
 
-    safe_print("生成内容（四平台，含抖音优先）：", flush=True)
+    safe_print("生成内容（当前入口仅保留视频号）：", flush=True)
     for _, _, title, desc, tags, label in JOBS:
         safe_print(f"  [{label}] 标题: {title}", flush=True)
         safe_print(f"  [{label}] 文案: {desc}", flush=True)
@@ -111,7 +111,7 @@ def main() -> int:
             results.append((label, "success"))
         safe_print()
 
-    safe_print("四平台队列已跑完（抖音 -> 小红书 -> 快手 -> 视频号）。")
+    safe_print("当前入口队列已跑完（视频号）。")
     safe_print("结果汇总:")
     failed = False
     for label, status in results:

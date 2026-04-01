@@ -47,7 +47,7 @@ python3 zhenlongxia_workflow.py "<图片路径>" --model=auto --aspectRatio=9:16
 3. 按顺序上传到指定平台：
 ```bash
 cd /Users/mima0000/.openclaw/workspace/xiaolong-upload
-/opt/homebrew/bin/python3.11 upload.py -p <平台> "<视频路径>" "<标题>" "<文案>" "<标签>"
+/opt/homebrew/bin/python3.12 upload.py -p <平台> "<视频路径>" "<标题>" "<文案>" "<标签>"
 ```
 4. 汇总发布结果通知用户
 

@@ -19,7 +19,12 @@ from platform_login import check_platform_login, login_instruction
 
 ensure_console_ready()
 
-PLATFORM_ORDER = ("douyin", "xiaohongshu", "kuaishou", "shipinhao")
+PLATFORM_ORDER = (
+    # "douyin",
+    # "kuaishou",
+    "shipinhao",
+    # "xiaohongshu",
+)
 
 PLATFORM_CONTENT = {
     "douyin": {

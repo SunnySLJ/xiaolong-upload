@@ -7,9 +7,9 @@
   python upload_all.py <视频路径> "标题" "文案" "标签"
 
 特点:
-  - 逐个平台被动检查登录 → 上传
+  - 逐个平台串行调用统一上传入口
   - 登录失效则跳过该平台，继续下一个
-  - 全部完成后汇总报告
+  - 全部完成后汇总报告并统一关闭浏览器
 """
 from __future__ import annotations
 
@@ -38,8 +38,13 @@ except ImportError:
     safe_print("错误：无法导入 upload 模块")
     sys.exit(1)
 
-# 平台顺序：抖音 > 小红书 > 快手 > 视频号
-PLATFORM_ORDER = ["douyin", "xiaohongshu", "kuaishou", "shipinhao"]
+# 本地批量入口当前只保留视频号；其他平台实现先保留，不在入口暴露。
+PLATFORM_ORDER = [
+    # "douyin",
+    # "kuaishou",
+    "shipinhao",
+    # "xiaohongshu",
+]
 
 PLATFORM_LABELS = {
     "douyin": "抖音",
@@ -55,10 +60,11 @@ def upload_to_platform(
     title: str,
     description: str,
     tags: list,
+    close_browser: bool = True,  # 是否在此平台上传后关闭浏览器
 ) -> Tuple[bool, str]:
     """
     上传到单个平台
-    流程：检查登录 → 如失效则自动恢复 → 上传 → 关闭浏览器
+    流程：直接调用 upload 函数处理当前平台的登录和上传
     返回：(成功与否，消息)
     """
     label = PLATFORM_LABELS.get(platform, platform)
@@ -66,31 +72,9 @@ def upload_to_platform(
     safe_print(f"📤 开始处理：{label}")
     safe_print(f"{'='*50}")
     
-    # 步骤 1: 检查登录状态
-    safe_print(f"🔍 检查 {label} 登录状态...")
-    
-    from common.platform_auth import check_platform_login
-    ok, msg = check_platform_login(platform, _PROJECT_ROOT, passive=True)
-    
-    if not ok:
-        # 步骤 1b: 登录失效，尝试自动恢复
-        safe_print(f"⚠ {label} 登录失效，尝试自动恢复...")
-        safe_print(f"   原因：{msg}")
-        
-        from skills.auth.scripts.platform_login import auto_recover_session
-        recover_ok, recover_msg = auto_recover_session(platform, _PROJECT_ROOT)
-        
-        if not recover_ok:
-            safe_print(f"❌ {label} 恢复失败，跳过该平台")
-            safe_print(f"   原因：{recover_msg}")
-            return False, f"跳过（恢复失败）：{recover_msg}"
-        
-        safe_print(f"✅ {label} 恢复成功：{recover_msg}")
-    else:
-        safe_print(f"✅ {label} 已登录：{msg}")
-    
-    # 步骤 2: 上传（handle_login=True，让 upload 函数处理浏览器）
-    safe_print(f"⏳ 上传视频中...")
+    # 直接调用 upload 函数，让它处理登录检查和上传
+    # 不再单独调用 check_platform_login，避免两次检查导致浏览器状态不一致
+    safe_print(f"⏳ 检查登录并上传视频中...")
     
     success = upload(
         platform=platform,
@@ -98,7 +82,8 @@ def upload_to_platform(
         title=title,
         description=description,
         tags=tags,
-        handle_login=True,  # 让 upload 函数处理浏览器关闭
+        handle_login=True,  # 让 upload 函数处理登录
+        close_browser=close_browser,  # 控制是否关闭浏览器
     )
     
     if success:
@@ -134,6 +119,7 @@ def upload_all_platforms(
     safe_print(f"📋 平台顺序：{' → '.join([PLATFORM_LABELS.get(p, p) for p in platforms])}")
     safe_print(f"{'='*60}")
     
+    # 上传所有平台（close_browser=False，等全部完成后再统一关闭）
     for platform in platforms:
         success, message = upload_to_platform(
             platform=platform,
@@ -141,8 +127,24 @@ def upload_all_platforms(
             title=title,
             description=description,
             tags=tags,
+            close_browser=False,  # 多平台模式下不单独关闭浏览器
         )
         results[platform] = (success, message)
+    
+    # 所有平台完成后，统一关闭浏览器
+    safe_print(f"\n{'='*60}")
+    safe_print(f"🔒 统一关闭浏览器...")
+    from skills.auth.scripts.platform_login import close_connect_browser
+    for platform in platforms:
+        success, _ = results[platform]
+        if success:
+            label = PLATFORM_LABELS.get(platform, platform)
+            try:
+                close_connect_browser(platform)
+                safe_print(f"✓ {label} 浏览器已关闭")
+            except Exception as e:
+                safe_print(f"⚠ {label} 关闭浏览器失败：{e}")
+    safe_print(f"{'='*60}")
     
     # 汇总报告
     safe_print(f"\n{'='*60}")
@@ -185,12 +187,12 @@ def _main():
         nargs="+",
         choices=PLATFORM_ORDER,
         default=None,
-        help="要上传的平台列表（默认全部：douyin xiaohongshu kuaishou shipinhao）",
+        help="要上传的平台列表（当前入口仅保留 shipinhao）",
     )
     parser.add_argument(
         "--platform",
         choices=PLATFORM_ORDER,
-        help="只上传到单个平台（--platform douyin 等同于 --platforms douyin）",
+        help="只上传到单个平台（当前入口仅保留 shipinhao）",
     )
 
     args = parser.parse_args()
