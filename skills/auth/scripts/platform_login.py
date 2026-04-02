@@ -28,6 +28,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from common.python_runtime import ensure_preferred_python_3_11
+from common.skill_runtime import resolve_project_root
 
 ensure_preferred_python_3_11()
 
@@ -123,7 +124,7 @@ _PROJECT_ROOT_OVERRIDE: Path | None = None
 
 
 def project_root() -> Path:
-    return _PROJECT_ROOT_OVERRIDE or Path(__file__).resolve().parents[3]
+    return _PROJECT_ROOT_OVERRIDE or resolve_project_root(_PROJECT_ROOT)
 
 
 def chrome_path() -> str:

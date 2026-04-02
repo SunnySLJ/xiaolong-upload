@@ -15,29 +15,22 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
 
-# 项目根目录（支持两种路径结构）
-SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# 尝试 xiaolong-upload 目录结构（脚本在 xiaolong-upload/scripts/）
-if (SCRIPT_DIR.parent.parent / "openclaw_upload").exists():
-    PROJECT_ROOT = SCRIPT_DIR.parent.parent / "openclaw_upload"
-# 尝试直接在 openclaw_upload 下
-elif (SCRIPT_DIR.parent / "flash_longxia").exists():
-    PROJECT_ROOT = SCRIPT_DIR.parent
-# 默认使用 workspace/openclaw_upload
-else:
-    PROJECT_ROOT = Path.home() / ".openclaw" / "workspace" / "openclaw_upload"
+from common.skill_runtime import resolve_flash_longxia_root, resolve_project_root, resolve_workspace_root
 
-OUTPUT_DIR = PROJECT_ROOT / "flash_longxia" / "output"
+OUTPUT_DIR = resolve_flash_longxia_root(project_root=PROJECT_ROOT) / "output"
 
 # 保留最近 N 天的视频
 KEEP_DAYS = 1
 
 
-def cleanup_old_videos():
+def cleanup_old_videos(output_dir: Path):
     """清理超过保留天数的视频文件"""
-    if not OUTPUT_DIR.exists():
-        print(f"[INFO] 输出目录不存在：{OUTPUT_DIR}")
+    if not output_dir.exists():
+        print(f"[INFO] 输出目录不存在：{output_dir}")
         return
     
     # 计算保留的截止日期
@@ -48,13 +41,13 @@ def cleanup_old_videos():
     deleted_size = 0
     
     print(f"[INFO] 开始清理视频文件")
-    print(f"[INFO] 输出目录：{OUTPUT_DIR}")
+    print(f"[INFO] 输出目录：{output_dir}")
     print(f"[INFO] 保留最近 {KEEP_DAYS} 天的文件")
     print(f"[INFO] 截止日期：{cutoff_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("-" * 50)
     
     # 遍历 output 目录
-    for file_path in OUTPUT_DIR.glob("*.mp4"):
+    for file_path in output_dir.glob("*.mp4"):
         try:
             file_mtime = file_path.stat().st_mtime
             
@@ -95,9 +88,19 @@ def main():
     )
     parser.add_argument("--manual", action="store_true", help="手动清理模式")
     parser.add_argument("--keep", type=int, default=KEEP_DAYS, help=f"保留最近 N 天的文件 (默认：{KEEP_DAYS})")
+    parser.add_argument("--project-root", default="", help="项目根目录；默认从 skills/runtime_config.json 或当前仓库推断")
+    parser.add_argument("--workspace-root", default="", help="工作区根目录；默认从 skills/runtime_config.json 或项目目录推断")
+    parser.add_argument("--output-dir", default="", help="直接指定要清理的 output 目录；优先级最高")
     args = parser.parse_args()
     
     KEEP_DAYS = args.keep
+    project_root = resolve_project_root(args.project_root or PROJECT_ROOT)
+    workspace_root = resolve_workspace_root(project_root=project_root, default=args.workspace_root or None)
+    output_dir = (
+        Path(args.output_dir).expanduser().resolve()
+        if args.output_dir
+        else resolve_flash_longxia_root(project_root=project_root, workspace_root=workspace_root) / "output"
+    )
     
     mode = "手动" if args.manual else "定时"
     print("=" * 50)
@@ -107,7 +110,7 @@ def main():
     print("=" * 50)
     
     try:
-        cleanup_old_videos()
+        cleanup_old_videos(output_dir)
         print("=" * 50)
         print(f"[SUCCESS] 清理任务完成")
         sys.exit(0)

@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from common.python_runtime import ensure_preferred_python_3_11
+from common.skill_runtime import resolve_project_root
 
 ensure_preferred_python_3_11()
 
@@ -40,7 +41,7 @@ AUTH = _load_auth_module()
 def _project_root(value: str | None) -> Path:
     if value:
         return Path(value).expanduser().resolve()
-    return SKILL_ROOT.parents[1]
+    return resolve_project_root(SKILL_ROOT.parents[1])
 
 
 def _normalize_platforms(values: list[str] | None) -> list[str]:

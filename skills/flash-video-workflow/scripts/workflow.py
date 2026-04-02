@@ -14,13 +14,19 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from common.skill_runtime import resolve_flash_longxia_root, resolve_project_root, resolve_workspace_root
+
 # 工作目录
-WORKSPACE = Path("/Users/mima0000/.openclaw/workspace")
+XIAOLONG_UPLOAD = resolve_project_root(PROJECT_ROOT)
+WORKSPACE = resolve_workspace_root(project_root=XIAOLONG_UPLOAD)
 INBOUND_IMAGES = WORKSPACE / "inbound_images"
-FLASH_LONGXIA = WORKSPACE / "openclaw_upload" / "flash_longxia"
+FLASH_LONGXIA = resolve_flash_longxia_root(project_root=XIAOLONG_UPLOAD, workspace_root=WORKSPACE)
 OUTPUT_DIR = FLASH_LONGXIA / "output"
 PENDING_TASKS = FLASH_LONGXIA / "pending_tasks.json"
-XIAOLONG_UPLOAD = WORKSPACE / "xiaolong-upload"
 UPLOAD_SCRIPT = XIAOLONG_UPLOAD / "upload.py"
 AUTH_SCRIPT = XIAOLONG_UPLOAD / "skills" / "auth" / "scripts" / "platform_login.py"
 QR_DIR = XIAOLONG_UPLOAD / "logs" / "auth_qr"
