@@ -286,7 +286,7 @@ class DouYinVideo(object):
         if inp:
             await inp.send_file(self.file_path)
 
-    async def upload(self, browser=None, existing_tab=None) -> None:
+    async def upload(self, browser=None, existing_tab=None) -> bool:
         own_browser = browser is None
         if existing_tab is not None and browser is not None:
             tab = existing_tab
@@ -317,10 +317,10 @@ class DouYinVideo(object):
 
             if "creator-micro/content/upload" not in tab.url:
                 douyin_logger.error("[+] 未进入上传页，请检查网络或 cookie")
-                return
+                return False
             if await _has_text(tab, "手机号登录") or await _has_text(tab, "扫码登录"):
                 douyin_logger.error("[+] 未登录，请用 save_douyin_cookie.py 保存 cookie 后重试")
-                return
+                return False
 
             upload_inp = await tab.select('div[class^="container"] input[type="file"]')
             if not upload_inp:
@@ -329,7 +329,7 @@ class DouYinVideo(object):
                 await upload_inp.send_file(self.file_path)
             else:
                 douyin_logger.error("[-] 未找到上传按钮")
-                return
+                return False
 
             for _ in range(60):
                 await tab.sleep(0.3)
@@ -338,7 +338,7 @@ class DouYinVideo(object):
                     break
             else:
                 douyin_logger.error("[-] 超时未进入视频发布页面")
-                return
+                return False
 
             while True:
                 await tab.sleep(1)
@@ -408,7 +408,8 @@ class DouYinVideo(object):
                 elif i > 0 and i % 8 == 0:
                     douyin_logger.info(f"[-] 等待发布结果... ({i // 4}s)")
             else:
-                douyin_logger.info("[-] 发布已提交，即将退出")
+                douyin_logger.error("[-] 发布流程已触发，但未确认成功")
+                return False
 
             if need_cookie_file(AUTH_MODE):
                 try:
@@ -418,6 +419,7 @@ class DouYinVideo(object):
                 except (asyncio.TimeoutError, Exception) as e:
                     douyin_logger.warning(f"[-] 保存 cookie 跳过: {e}")
             await tab.sleep(1)
+            return publish_success
         finally:
             if publish_success and _nodriver_util:
                 try:

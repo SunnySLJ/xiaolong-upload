@@ -110,6 +110,19 @@ async def _upload_file_via_cdp(tab, file_path: str) -> bool:
         return False
 
 
+async def _wait_and_upload_file_via_cdp(tab, file_path: str, retries: int = 6, delay: float = 1.0) -> bool:
+    """等待上传控件渲染完成后再设置文件，降低页面慢加载时的误判。"""
+    for attempt in range(1, retries + 1):
+        if await _upload_file_via_cdp(tab, file_path):
+            if attempt > 1:
+                shipinhao_logger.info(f"[-] Step 1 重试成功（第 {attempt} 次）")
+            return True
+        if attempt < retries:
+            shipinhao_logger.info(f"[-] Step 1 等待上传控件... ({attempt}/{retries})")
+            await tab.sleep(delay)
+    return False
+
+
 async def _fill_text(el, text: str) -> bool:
     if not text:
         return True
@@ -503,7 +516,7 @@ class ShipinhaoVideo(object):
             shipinhao_logger.info("[-] Step 0: 打开发表页...")
             await tab.sleep(3)
 
-            ok_step1 = await _upload_file_via_cdp(tab, self.file_path)
+            ok_step1 = await _wait_and_upload_file_via_cdp(tab, self.file_path)
             if ok_step1:
                 shipinhao_logger.info("[-] Step 1 完成：已设置文件")
             else:
@@ -585,18 +598,26 @@ class ShipinhaoVideo(object):
 
             await tab.sleep(1)
 
+            publish_confirmed = False
             for _ in range(40):
                 await tab.sleep(0.5)
                 url = (tab.url or "").lower()
                 if "success" in url or "list" in url or "content" in url:
                     shipinhao_logger.success("[-] 视频发表成功")
+                    publish_confirmed = True
                     break
-                if await _has_text(tab, "发表成功", timeout=1) or await _has_text(tab, "发布成功", timeout=1):
+                if (
+                    await _has_text(tab, "发表成功", timeout=1)
+                    or await _has_text(tab, "发布成功", timeout=1)
+                    or await _has_text(tab, "已发表", timeout=1)
+                ):
                     shipinhao_logger.success("[-] 视频发表成功")
+                    publish_confirmed = True
                     break
                 shipinhao_logger.info("[-] 视频正在发表中...")
             else:
-                shipinhao_logger.info("[-] Step 6: 发表流程已触发")
+                shipinhao_logger.error("[-] Step 6 失败：已触发表达流程，但未确认成功")
+                return False
 
             if need_cookie_file(AUTH_MODE):
                 try:
@@ -611,7 +632,7 @@ class ShipinhaoVideo(object):
                     uc.util.get_registered_instances().discard(browser)
                 except Exception:
                     pass
-            return True
+            return publish_confirmed
         finally:
             if not keep_browser_open:
                 browser.stop()

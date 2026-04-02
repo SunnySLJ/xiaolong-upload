@@ -108,8 +108,8 @@ def upload_to_douyin(
             account_name=account_name,
         )
         # 3) 进入上传主流程：上传文件 -> 填写标题文案话题 -> 发布。
-        await app.upload(browser=browser, existing_tab=existing_tab)
-        return True
+        ok = await app.upload(browser=browser, existing_tab=existing_tab)
+        return ok is True
 
     try:
         return asyncio.run(_do_upload())

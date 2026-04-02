@@ -563,18 +563,22 @@ class XiaohongshuVideo(object):
 
             await tab.sleep(2)
 
+            publish_confirmed = False
             for _ in range(60):
                 await tab.sleep(0.5)
                 url = (tab.url or "").lower()
                 if "publish/success" in url or "note-manager" in url or "manage" in url:
                     xiaohongshu_logger.success("[-] 视频发布成功")
+                    publish_confirmed = True
                     break
                 if await _has_text(tab, "发布成功", timeout=1):
                     xiaohongshu_logger.success("[-] 视频发布成功")
+                    publish_confirmed = True
                     break
                 xiaohongshu_logger.info("[-] 视频正在发布中...")
             else:
-                xiaohongshu_logger.info("[-] Step 6: 发布流程已触发，请稍后到创作者中心确认")
+                xiaohongshu_logger.error("[-] Step 6 失败: 发布流程已触发，但未确认成功")
+                return False
 
             if need_cookie_file(AUTH_MODE):
                 try:
@@ -583,7 +587,7 @@ class XiaohongshuVideo(object):
                 except (asyncio.TimeoutError, Exception) as e:
                     xiaohongshu_logger.warning(f"[-] 保存 cookie 跳过: {e}")
             await tab.sleep(1)
-            return True
+            return publish_confirmed
         finally:
             if not keep_browser_open:
                 browser.stop()

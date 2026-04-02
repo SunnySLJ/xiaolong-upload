@@ -817,19 +817,23 @@ class KuaishouVideo(object):
                 await tab.sleep(0.3)
 
             _step_log("Step 6: 等待发布完成...")
+            publish_confirmed = False
             for idx in range(60):
                 await tab.sleep(0.4)
                 url = (tab.url or "").lower()
                 if "success" in url or "manage" in url or "article" in url and "publish" not in url:
                     _step_log("视频发布成功")
+                    publish_confirmed = True
                     break
                 if await _has_text(tab, "发布成功", timeout=1):
                     _step_log("视频发布成功")
+                    publish_confirmed = True
                     break
                 if idx > 0 and idx % 5 == 0:
                     _step_log(f"发布中... {idx * 0.4:.0f}s")
             else:
-                kuaishou_logger.info("[-] Step 6: 发布流程已触发，请稍后到创作者中心确认")
+                kuaishou_logger.error("[-] Step 6 失败: 发布流程已触发，但未确认成功")
+                return False
 
             if need_cookie_file(AUTH_MODE):
                 try:
@@ -843,7 +847,7 @@ class KuaishouVideo(object):
                 uc.util.get_registered_instances().discard(browser)
             except Exception:
                 pass
-            return True
+            return publish_confirmed
         finally:
             pass  # 不关闭浏览器，脚本结束后用户可继续操作
 
