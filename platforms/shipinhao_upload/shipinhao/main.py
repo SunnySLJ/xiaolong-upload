@@ -123,6 +123,163 @@ async def _wait_and_upload_file_via_cdp(tab, file_path: str, retries: int = 6, d
     return False
 
 
+def _normalize_eval_payload(payload):
+    if isinstance(payload, (list, tuple)) and payload:
+        payload = payload[0]
+    if hasattr(payload, "value"):
+        payload = getattr(payload, "value", None)
+    if isinstance(payload, str):
+        payload = payload.strip()
+        if payload.startswith("{") and payload.endswith("}"):
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError:
+                return {"text": payload}
+    return payload or {}
+
+
+def _compact_payload_text(payload: dict, limit: int = 240) -> str:
+    text = str((payload or {}).get("text") or "").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _js_collect_page_state(file_name: str = "") -> str:
+    file_name_json = json.dumps(file_name or "", ensure_ascii=False)
+    return f"""
+    (() => {{
+        const fileName = {file_name_json};
+        const uploadStatePattern = /上传成功|上传完成|100%|处理中|转码|替换视频|重新上传|视频时长|视频封面|上传中|上传进度|预览/;
+        const loginPattern = /微信扫码|扫码登录|请使用微信扫码|刷新二维码|登录后使用/;
+        const publishPattern = /发表|发布|上传视频|替换视频|重新上传|视频封面|内容管理/;
+        const previewSelectors = [
+            'video',
+            'img[class*="cover"]',
+            'img[class*="thumb"]',
+            '[class*="poster"] img',
+            '[class*="preview"] video',
+            '[class*="preview"] img',
+            '[class*="upload"] [class*="item"]',
+            '[class*="upload"] [class*="card"]',
+            '[class*="upload"] [class*="preview"]',
+            '[class*="post"] [class*="preview"]',
+            '[class*="upload"] canvas',
+        ];
+        const seen = new Set();
+        const snippets = [];
+        let hasFileName = false;
+        let hasPreview = false;
+        let hasUploadState = false;
+        let hasLoginPrompt = false;
+        let hasPublishEntry = false;
+        let fileInputCount = 0;
+
+        function normalizeText(value) {{
+            return (value || '').replace(/\\s+/g, ' ').trim();
+        }}
+
+        function inspect(root, depth) {{
+            if (!root || depth > 5 || seen.has(root)) return;
+            seen.add(root);
+
+            let text = '';
+            try {{
+                text = normalizeText(root.body ? root.body.innerText : root.innerText);
+            }} catch (e) {{}}
+            if (text) {{
+                snippets.push(text.slice(0, 320));
+                if (fileName && text.includes(fileName)) hasFileName = true;
+                if (uploadStatePattern.test(text)) hasUploadState = true;
+                if (loginPattern.test(text)) hasLoginPrompt = true;
+                if (publishPattern.test(text)) hasPublishEntry = true;
+            }}
+
+            try {{
+                for (const sel of previewSelectors) {{
+                    if (root.querySelector(sel)) {{
+                        hasPreview = true;
+                        break;
+                    }}
+                }}
+            }} catch (e) {{}}
+
+            try {{
+                const fileInputs = root.querySelectorAll('input[type=file]');
+                for (const input of fileInputs) {{
+                    const count = input.files ? input.files.length : 0;
+                    if (count > 0) {{
+                        fileInputCount = Math.max(fileInputCount, count);
+                        const names = Array.from(input.files).map(file => file && file.name || '');
+                        if (fileName && names.includes(fileName)) hasFileName = true;
+                    }}
+                }}
+            }} catch (e) {{}}
+
+            try {{
+                root.querySelectorAll('iframe').forEach((frame) => {{
+                    try {{
+                        if (frame.contentDocument) inspect(frame.contentDocument, depth + 1);
+                    }} catch (e) {{}}
+                }});
+            }} catch (e) {{}}
+
+            try {{
+                root.querySelectorAll('*').forEach((el) => {{
+                    if (el.shadowRoot) inspect(el.shadowRoot, depth + 1);
+                }});
+            }} catch (e) {{}}
+        }}
+
+        inspect(document, 0);
+        return JSON.stringify({{
+            hasFileName,
+            hasPreview,
+            hasUploadState,
+            hasLoginPrompt,
+            hasPublishEntry,
+            fileInputCount,
+            text: normalizeText(snippets.join(' | ')).slice(0, 2400),
+        }});
+    }})()
+    """
+
+
+def _js_detect_uploaded_video(file_path: str) -> str:
+    return _js_collect_page_state(os.path.basename(file_path))
+
+
+def _preview_ready(payload: dict) -> bool:
+    return bool(
+        payload.get("hasFileName")
+        or payload.get("hasPreview")
+        or payload.get("hasUploadState")
+        or int(payload.get("fileInputCount") or 0) > 0
+    )
+
+
+async def _wait_uploaded_preview(tab, file_path: str, retries: int = 80, delay: float = 0.5):
+    last_payload = {}
+    for attempt in range(1, retries + 1):
+        try:
+            payload = await tab.evaluate(_js_detect_uploaded_video(file_path), return_by_value=True)
+        except Exception:
+            payload = None
+        payload = _normalize_eval_payload(payload)
+        last_payload = payload
+        if _preview_ready(payload):
+            if attempt > 1:
+                shipinhao_logger.info(f"[-] Step 2 预览确认成功（第 {attempt} 次）")
+            return payload
+        if attempt < retries and attempt % 8 == 0:
+            shipinhao_logger.info(
+                f"[-] Step 2 等待上传预览... ({attempt}/{retries}) | "
+                f"publish={payload.get('hasPublishEntry')} login={payload.get('hasLoginPrompt')}"
+            )
+        await tab.sleep(delay)
+    return last_payload
+
+
 async def _fill_text(el, text: str) -> bool:
     if not text:
         return True
@@ -251,6 +408,404 @@ def _gen_title_desc_from_path(file_path: str, tags: list = None) -> tuple:
     return gen_title_desc_from_path(file_path, title_max=SPH_TITLE_MAX, style="rich", tags=tags)
 
 
+def _find_existing_shipinhao_tab(browser):
+    try:
+        tabs = getattr(browser, "tabs", None) or []
+    except Exception:
+        return None
+    for tab in tabs:
+        try:
+            url = (getattr(tab, "url", None) or getattr(getattr(tab, "target", None), "url", None) or "").lower()
+        except Exception:
+            continue
+        if "channels.weixin.qq.com" not in url:
+            continue
+        if any(marker in url for marker in ("platform/post/create", "platform/post/list", "platform/content")):
+            return tab
+    return None
+
+
+async def _list_page_contains_title(tab, title: str) -> bool:
+    normalized = (title or "").strip()
+    if not normalized:
+        return False
+    probes = []
+    for size in (16, 12, 8):
+        snippet = normalized[:size].strip()
+        if snippet and snippet not in probes:
+            probes.append(snippet)
+    for probe in probes:
+        try:
+            if await _has_text(tab, probe, timeout=1):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _js_publish_button_probe() -> str:
+    return """
+    (() => {
+        const labels = new Set(["发表", "发布", "视频发表", "立即发表", "发布视频"]);
+        const seen = new Set();
+        const candidates = [];
+
+        function textOf(el) {
+            return (el && (el.innerText || el.textContent || "") || "").replace(/\\s+/g, " ").trim();
+        }
+
+        function visible(el) {
+            if (!el || !el.isConnected) return false;
+            const style = window.getComputedStyle(el);
+            if (!style || style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") === 0) {
+                return false;
+            }
+            const rect = el.getBoundingClientRect();
+            return rect.width >= 40 && rect.height >= 24 && rect.bottom > 0 && rect.right > 0;
+        }
+
+        function disabled(el) {
+            return !!(
+                el.disabled ||
+                el.getAttribute("disabled") !== null ||
+                el.getAttribute("aria-disabled") === "true" ||
+                /disabled|ban/.test((el.className || "").toString())
+            );
+        }
+
+        function collect(root, depth) {
+            if (!root || depth > 4 || seen.has(root)) return;
+            seen.add(root);
+            let elements = [];
+            try {
+                elements = root.querySelectorAll("button, [role=button], .weui-desktop-btn, .weui-desktop-btn_primary, div, span, a");
+            } catch (e) {}
+            for (const el of elements) {
+                const text = textOf(el);
+                if (!labels.has(text) || !visible(el) || disabled(el)) continue;
+                const rect = el.getBoundingClientRect();
+                const primary = /primary|publish|submit|weui-desktop-btn_primary/.test((el.className || "").toString()) ? 1 : 0;
+                const exactPublish = text === "发表" ? 1 : 0;
+                candidates.push({
+                    text,
+                    rect,
+                    primary,
+                    exactPublish,
+                    score: exactPublish * 1000 + primary * 200 + Math.round(rect.bottom) + Math.round(rect.right / 10),
+                });
+                el.__openclawPublishCandidate = true;
+            }
+            try {
+                root.querySelectorAll("iframe").forEach((frame) => {
+                    try { if (frame.contentDocument) collect(frame.contentDocument, depth + 1); } catch (e) {}
+                });
+            } catch (e) {}
+            try {
+                root.querySelectorAll("*").forEach((el) => {
+                    if (el.shadowRoot) collect(el.shadowRoot, depth + 1);
+                });
+            } catch (e) {}
+        }
+
+        collect(document, 0);
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates[0] || null;
+        return JSON.stringify({
+            found: !!best,
+            text: best ? best.text : "",
+            score: best ? best.score : 0,
+            count: candidates.length,
+            rect: best ? best.rect : null,
+        });
+    })()
+    """
+
+
+def _js_click_publish_button(force_native: bool = False) -> str:
+    force_native_json = "true" if force_native else "false"
+    return """
+    (() => {
+        const labels = new Set(["发表", "发布", "视频发表", "立即发表", "发布视频"]);
+        const seen = new Set();
+        let best = null;
+        const forceNative = %s;
+
+        function textOf(el) {
+            return (el && (el.innerText || el.textContent || "") || "").replace(/\\s+/g, " ").trim();
+        }
+
+        function visible(el) {
+            if (!el || !el.isConnected) return false;
+            const style = window.getComputedStyle(el);
+            if (!style || style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") === 0) {
+                return false;
+            }
+            const rect = el.getBoundingClientRect();
+            return rect.width >= 40 && rect.height >= 24 && rect.bottom > 0 && rect.right > 0;
+        }
+
+        function disabled(el) {
+            return !!(
+                el.disabled ||
+                el.getAttribute("disabled") !== null ||
+                el.getAttribute("aria-disabled") === "true" ||
+                /disabled|ban/.test((el.className || "").toString())
+            );
+        }
+
+        function visit(root, depth) {
+            if (!root || depth > 4 || seen.has(root)) return;
+            seen.add(root);
+            let elements = [];
+            try {
+                elements = root.querySelectorAll("button, [role=button], .weui-desktop-btn, .weui-desktop-btn_primary, div, span, a");
+            } catch (e) {}
+            for (const el of elements) {
+                const text = textOf(el);
+                if (!labels.has(text) || !visible(el) || disabled(el)) continue;
+                const rect = el.getBoundingClientRect();
+                const primary = /primary|publish|submit|weui-desktop-btn_primary/.test((el.className || "").toString()) ? 1 : 0;
+                const exactPublish = text === "发表" ? 1 : 0;
+                const score = exactPublish * 1000 + primary * 200 + Math.round(rect.bottom) + Math.round(rect.right / 10);
+                if (!best || score > best.score) {
+                    best = { el, text, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, score };
+                }
+            }
+            try {
+                root.querySelectorAll("iframe").forEach((frame) => {
+                    try { if (frame.contentDocument) visit(frame.contentDocument, depth + 1); } catch (e) {}
+                });
+            } catch (e) {}
+            try {
+                root.querySelectorAll("*").forEach((el) => {
+                    if (el.shadowRoot) visit(el.shadowRoot, depth + 1);
+                });
+            } catch (e) {}
+        }
+
+        visit(document, 0);
+        if (!best || !best.el) {
+            return JSON.stringify({ clicked: false, reason: "not_found" });
+        }
+
+        const el = best.el;
+        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (e) {}
+        try { el.focus(); } catch (e) {}
+        try {
+            if (forceNative) {
+                el.click();
+            } else {
+                el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1 }));
+                el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window, button: 0, buttons: 1 }));
+                el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0 }));
+                el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window, button: 0, buttons: 0 }));
+                el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window, button: 0, buttons: 0 }));
+            }
+        } catch (e) {
+            return JSON.stringify({ clicked: false, reason: "click_failed", text: best.text, score: best.score, error: String(e) });
+        }
+        return JSON.stringify({
+            clicked: true,
+            text: best.text,
+            score: best.score,
+            rect: best.rect,
+        });
+    })()
+    """ % force_native_json
+
+
+def _js_publish_submission_state() -> str:
+    return """
+    (() => {
+        const labels = new Set(["发表", "发布", "视频发表", "立即发表", "发布视频"]);
+        const loadingPattern = /发表中|发布中|提交中|处理中|请稍候|上传中/;
+        const successPattern = /发表成功|发布成功|已发表/;
+        const pageText = (document.body && document.body.innerText || "").replace(/\\s+/g, " ").trim();
+        const state = {
+            url: location.href,
+            hasLoadingText: loadingPattern.test(pageText),
+            hasSuccessText: successPattern.test(pageText),
+            buttonVisible: false,
+            buttonDisabled: false,
+        };
+        const nodes = document.querySelectorAll("button, [role=button], .weui-desktop-btn, .weui-desktop-btn_primary, div, span, a");
+        for (const el of nodes) {
+            const text = (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
+            if (!labels.has(text)) continue;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            const visible = style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") !== 0 && rect.width >= 40 && rect.height >= 24;
+            if (!visible) continue;
+            state.buttonVisible = true;
+            state.buttonDisabled = !!(el.disabled || el.getAttribute("disabled") !== null || el.getAttribute("aria-disabled") === "true");
+            break;
+        }
+        return JSON.stringify(state);
+    })()
+    """
+
+
+def _js_neutralize_publish_overlays() -> str:
+    return """
+    (() => {
+        const selectors = [
+            '[class*="mask"]',
+            '[class*="modal"]',
+            '[class*="dialog"]',
+            '[class*="popover"]',
+            '[class*="tooltip"]',
+            '[class*="guide"]',
+            '[class*="tour"]',
+            '[class*="layer"]',
+            '[class*="banner"]',
+            '[class*="toast"]',
+        ];
+        let touched = 0;
+        for (const sel of selectors) {
+            try {
+                document.querySelectorAll(sel).forEach((el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") === 0) return;
+                    if (rect.width < 40 || rect.height < 40) return;
+                    el.style.pointerEvents = "none";
+                    touched += 1;
+                });
+            } catch (e) {}
+        }
+        return touched;
+    })()
+    """
+
+
+async def _click_via_cdp(tab, rect: dict) -> bool:
+    try:
+        from nodriver import cdp
+        x = float(rect["x"]) + float(rect["width"]) / 2.0
+        y = float(rect["y"]) + float(rect["height"]) / 2.0
+        await tab.send(cdp.input_.dispatch_mouse_event("mouseMoved", x=x, y=y, button=cdp.input_.MouseButton.LEFT, buttons=1, pointer_type="mouse"))
+        await tab.send(cdp.input_.dispatch_mouse_event("mousePressed", x=x, y=y, button=cdp.input_.MouseButton.LEFT, buttons=1, click_count=1, pointer_type="mouse"))
+        await tab.send(cdp.input_.dispatch_mouse_event("mouseReleased", x=x, y=y, button=cdp.input_.MouseButton.LEFT, buttons=0, click_count=1, pointer_type="mouse"))
+        return True
+    except Exception as e:
+        shipinhao_logger.warning(f"[-] CDP 鼠标点击失败：{e}")
+        return False
+
+
+async def _click_publish_button(tab) -> tuple[bool, str]:
+    payload = _normalize_eval_payload(await tab.evaluate(_js_publish_button_probe(), return_by_value=True))
+    if not payload.get("found"):
+        return False, "未找到真实发表按钮"
+
+    try:
+        await tab.evaluate(_js_neutralize_publish_overlays(), return_by_value=True)
+    except Exception:
+        pass
+
+    clicked_text = payload.get("text") or "发表"
+    rect = payload.get("rect") or {}
+    attempts = []
+    if rect:
+        attempts.append(("cdp", rect))
+    attempts.append(("dom", None))
+    attempts.append(("native", None))
+
+    for mode, mode_rect in attempts:
+        if mode == "cdp":
+            clicked = await _click_via_cdp(tab, mode_rect)
+            click_payload = {"clicked": clicked, "text": clicked_text}
+        elif mode == "dom":
+            click_payload = _normalize_eval_payload(await tab.evaluate(_js_click_publish_button(False), return_by_value=True))
+        else:
+            click_payload = _normalize_eval_payload(await tab.evaluate(_js_click_publish_button(True), return_by_value=True))
+
+        if not click_payload.get("clicked"):
+            continue
+
+        clicked_text = click_payload.get("text") or clicked_text
+        for _ in range(20):
+            await tab.sleep(0.3)
+            state = _normalize_eval_payload(await tab.evaluate(_js_publish_submission_state(), return_by_value=True))
+            url = (state.get("url") or "").lower()
+            if state.get("hasSuccessText") or state.get("hasLoadingText"):
+                return True, clicked_text
+            if "success" in url or "post/list" in url or "content" in url:
+                return True, clicked_text
+            if state.get("buttonVisible") and state.get("buttonDisabled"):
+                return True, clicked_text
+        try:
+            await tab.evaluate(_js_neutralize_publish_overlays(), return_by_value=True)
+        except Exception:
+            pass
+    return False, f"按钮“{clicked_text}”未进入提交态"
+
+
+async def _recover_shipinhao_tab(browser):
+    tab = _find_existing_shipinhao_tab(browser)
+    if tab is not None:
+        return tab
+    for target_url in (
+        "https://channels.weixin.qq.com/platform/post/list",
+        "https://channels.weixin.qq.com/platform/content",
+        SPH_UPLOAD_URL,
+    ):
+        try:
+            return await browser.get(target_url)
+        except Exception:
+            continue
+    return None
+
+
+async def _confirm_publish_result(browser, tab, title: str) -> bool:
+    current_tab = tab
+    list_page_checks = 0
+    max_list_page_checks = 3
+    for _ in range(240):
+        await asyncio.sleep(0.5)
+        try:
+            url = (current_tab.url or "").lower()
+        except Exception:
+            url = ""
+        try:
+            if "success" in url:
+                shipinhao_logger.success("[-] 视频发表成功")
+                return True
+            if "post/list" in url or "content" in url:
+                list_page_checks += 1
+                if await _list_page_contains_title(current_tab, title):
+                    shipinhao_logger.success("[-] 视频发表成功（列表页已出现本次标题）")
+                    return True
+                if list_page_checks >= max_list_page_checks:
+                    shipinhao_logger.success(
+                        f"[-] 已进入列表页，平台标题尚未刷新；按发布完成处理（列表页检查 {max_list_page_checks} 次）"
+                    )
+                    return True
+                if list_page_checks == 1:
+                    shipinhao_logger.info("[-] 已进入列表页，等待平台刷新标题...")
+                continue
+            if (
+                await _has_text(current_tab, "发表成功", timeout=1)
+                or await _has_text(current_tab, "发布成功", timeout=1)
+                or await _has_text(current_tab, "已发表", timeout=1)
+            ):
+                shipinhao_logger.success("[-] 视频发表成功")
+                return True
+            shipinhao_logger.info("[-] 视频正在发表中...")
+        except Exception as e:
+            shipinhao_logger.warning(f"[-] 提交后状态检查异常，尝试恢复会话：{e}")
+            recovered = await _recover_shipinhao_tab(browser)
+            if recovered is None:
+                await asyncio.sleep(1)
+                continue
+            current_tab = recovered
+            try:
+                await current_tab.sleep(1)
+            except Exception:
+                pass
+    shipinhao_logger.warning("[-] Step 6 超时：已触发表达流程，但未确认成功")
+    return False
+
+
 async def _check_logged_in(browser, account_file: str, account_name: str) -> tuple[bool, object]:
     """返回 (是否已登录，tab)。登录成功时 tab 已在发表页"""
     if need_cookie_file(AUTH_MODE) and os.path.exists(account_file):
@@ -259,19 +814,23 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
         except Exception:
             pass
 
-    # connect 模式下 browser.get() 可能抛出 StopIteration，重试一次
-    for retry in range(2):
-        try:
-            tab = await browser.get(SPH_UPLOAD_URL)
-            break
-        except (StopIteration, RuntimeError) as e:
-            if retry == 0:
-                shipinhao_logger.warning(f"[-] browser.get() 失败，重试：{e}")
-                _open_target_tab(SPH_UPLOAD_URL)
-                await asyncio.sleep(1)
-            else:
-                shipinhao_logger.error("[-] browser.get() 重试失败")
-                return False, None
+    tab = _find_existing_shipinhao_tab(browser)
+    if tab is None:
+        # connect 模式下 browser.get() 可能抛出 StopIteration，重试一次
+        for retry in range(2):
+            try:
+                tab = await browser.get(SPH_UPLOAD_URL)
+                break
+            except (StopIteration, RuntimeError) as e:
+                if retry == 0:
+                    shipinhao_logger.warning(f"[-] browser.get() 失败，重试：{e}")
+                    _open_target_tab(SPH_UPLOAD_URL)
+                    await asyncio.sleep(1)
+                else:
+                    shipinhao_logger.error("[-] browser.get() 重试失败")
+                    return False, None
+    if tab is None:
+        return False, None
     
     # 视频号登录页检测
     await tab.sleep(5)
@@ -281,45 +840,35 @@ async def _check_logged_in(browser, account_file: str, account_name: str) -> tup
         shipinhao_logger.info("[+] 检测到登录页，cookie/会话已失效")
         return False, None
     
-    # 检查是否已登录：查找发布相关元素
     await tab.sleep(3)
-    
-    # 先判断是否有"发布"按钮（已登录的标志）
+
     for i in range(3):
         try:
-            has_publish = await _has_text(tab, "发表", timeout=3) or await _has_text(tab, "发布", timeout=3) or await _has_text(tab, "上传视频", timeout=3)
+            payload = await tab.evaluate(_js_collect_page_state(), return_by_value=True)
         except Exception:
-            has_publish = False
-            
-        if has_publish:
-            shipinhao_logger.info("[+] 已登录（检测到发布按钮）")
-            return True, tab
-        
-        await tab.sleep(3)
-    
-    # 如果没有发布按钮，再检查是否需要扫码
-    for i in range(3):
-        try:
-            has_login = await _has_text(tab, "微信扫码", timeout=3) or await _has_text(tab, "扫码登录", timeout=3) or await _has_text(tab, "请使用微信扫码", timeout=3)
-        except Exception:
-            has_login = False
-        
-        if has_login:
+            payload = None
+        payload = _normalize_eval_payload(payload)
+
+        if payload.get("hasLoginPrompt") and not payload.get("hasPublishEntry"):
             if i < 2:
-                await tab.sleep(3)
+                await tab.sleep(2)
                 continue
             shipinhao_logger.info("[+] 检测到登录页，需要微信扫码登录")
             return False, None
-        else:
-            break
 
-    # 如果都不确定，看 URL 是否在发布页
-    if "post/create" in url_lower or "publish" in url_lower:
-        shipinhao_logger.info("[+] 已登录（URL 显示在发布页）")
+        if payload.get("hasPublishEntry"):
+            shipinhao_logger.info("[+] 已登录（检测到发布态页面元素）")
+            return True, tab
+
+        if i < 2:
+            await tab.sleep(2)
+
+    if "post/create" in url_lower and not payload.get("hasLoginPrompt"):
+        shipinhao_logger.info("[+] 已登录（URL 与页面状态显示在发布页）")
         return True, tab
 
-    shipinhao_logger.info("[+] 已登录")
-    return True, tab
+    shipinhao_logger.warning(f"[-] 登录状态不明确，按未登录处理：{_compact_payload_text(payload)}")
+    return False, None
 
 
 async def cookie_auth(account_file: str, account_name: str = "default") -> tuple[bool, object, object]:
@@ -523,22 +1072,19 @@ class ShipinhaoVideo(object):
                 shipinhao_logger.error("[-] Step 1 失败：未找到上传 input")
                 return False
 
-            async def _upload_done():
-                for txt in ("上传成功", "上传完成", "100%", "处理中", "转码"):
-                    if await _has_text(tab, txt, timeout=0.6):
-                        return True
-                return False
-
-            for i in range(240):
-                await tab.sleep(0.5)
-                if await _upload_done():
-                    shipinhao_logger.success("[-] 视频上传完毕")
-                    break
-                if i > 0 and i % 6 == 0:
-                    shipinhao_logger.info(f"[-] 上传中... ({i // 2}s)")
+            preview_payload = await _wait_uploaded_preview(tab, self.file_path)
+            if _preview_ready(preview_payload):
+                shipinhao_logger.success("[-] 视频上传完毕")
+                shipinhao_logger.info("[-] Step 2 完成")
             else:
-                shipinhao_logger.warning("[-] Step 2: 超时")
-            shipinhao_logger.info("[-] Step 2 完成")
+                shipinhao_logger.error(
+                    "[-] Step 2 失败：页面未出现视频预览/上传卡片"
+                    f" | publish={preview_payload.get('hasPublishEntry')}"
+                    f" login={preview_payload.get('hasLoginPrompt')}"
+                    f" fileInputCount={preview_payload.get('fileInputCount')}"
+                    f" | text={_compact_payload_text(preview_payload)}"
+                )
+                return False
 
             await tab.sleep(0.5)
 
@@ -571,53 +1117,17 @@ class ShipinhaoVideo(object):
                 except Exception:
                     pass
 
-            clicked = False
             for _ in range(3):
                 await _scroll_bottom()
 
-            for retry in range(3):
-                for btn_text in ("发表", "发布", "视频发表", "立即发表", "发布视频"):
-                    try:
-                        btn = await tab.find(btn_text, best_match=True, timeout=2)
-                        if btn:
-                            await btn.click()
-                            shipinhao_logger.info(f"[-] Step 5 完成：已点击「{btn_text}」")
-                            clicked = True
-                            break
-                    except Exception:
-                        continue
-                if clicked:
-                    break
-                if retry < 2:
-                    await tab.sleep(0.8)
-                    await _scroll_bottom()
-
+            clicked, publish_message = await _click_publish_button(tab)
             if not clicked:
-                shipinhao_logger.error("[-] Step 5 失败：未找到发表按钮")
+                shipinhao_logger.error(f"[-] Step 5 失败：{publish_message}")
                 return False
+            shipinhao_logger.info(f"[-] Step 5 完成：已点击「{publish_message or '发表'}」")
 
             await tab.sleep(1)
-
-            publish_confirmed = False
-            for _ in range(40):
-                await tab.sleep(0.5)
-                url = (tab.url or "").lower()
-                if "success" in url or "list" in url or "content" in url:
-                    shipinhao_logger.success("[-] 视频发表成功")
-                    publish_confirmed = True
-                    break
-                if (
-                    await _has_text(tab, "发表成功", timeout=1)
-                    or await _has_text(tab, "发布成功", timeout=1)
-                    or await _has_text(tab, "已发表", timeout=1)
-                ):
-                    shipinhao_logger.success("[-] 视频发表成功")
-                    publish_confirmed = True
-                    break
-                shipinhao_logger.info("[-] 视频正在发表中...")
-            else:
-                shipinhao_logger.error("[-] Step 6 失败：已触发表达流程，但未确认成功")
-                return False
+            publish_confirmed = await _confirm_publish_result(browser, tab, self.title)
 
             if need_cookie_file(AUTH_MODE):
                 try:
