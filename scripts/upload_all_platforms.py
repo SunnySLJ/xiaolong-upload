@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Upload one video to all supported platforms via the unified upload entrypoint."""
+"""Upload one video via the unified upload entrypoint.
+
+Current queue and login check path are limited to Shipinhao.
+"""
 from __future__ import annotations
 
 import sys
@@ -20,6 +23,7 @@ from platform_login import check_platform_login, login_instruction
 ensure_console_ready()
 
 PLATFORM_ORDER = (
+    # 登录检查当前只支持视频号，因此默认队列也只保留视频号。
     # "douyin",
     # "kuaishou",
     "shipinhao",

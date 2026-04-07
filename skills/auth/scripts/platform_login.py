@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Cross-platform connect-login helper for the four upload platforms.
+"""Connect-login helper used by the auth skill.
 
-This copy lives inside the auth skill so it can be reused independently.
+Legacy multi-platform mappings are kept commented for reference only.
+The current project intentionally exposes login checking/relogin for
+Shipinhao only.
 """
 from __future__ import annotations
 
@@ -33,6 +35,8 @@ ensure_preferred_python_3_11()
 
 
 PLATFORMS = {
+    # 历史平台配置先保留注释，避免端口/目录映射丢失；
+    # 当前项目的“检查登录/补登录”入口只支持视频号。
     # "douyin": {
     #     "label": "抖音",
     #     "port": 9224,
@@ -112,6 +116,7 @@ PLATFORMS = {
 }
 
 CLI_PLATFORMS = (
+    # CLI 层只暴露视频号，避免外部继续把本脚本当成四平台登录检查入口。
     # "douyin",
     # "xiaohongshu",
     # "kuaishou",

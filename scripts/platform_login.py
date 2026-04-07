@@ -4,6 +4,8 @@
 
 Keep a single source of truth in skills/auth/scripts/platform_login.py to
 avoid drift between project and skill entrypoints.
+
+Current project policy: login checking/relogin is only exposed for Shipinhao.
 """
 from __future__ import annotations
 

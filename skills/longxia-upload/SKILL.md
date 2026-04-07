@@ -166,6 +166,7 @@ ${OPENCLAW_PYTHON:-python3.12} upload.py --platform <platform> <video_path> --lo
 
 - `upload.py` 默认会在登录成功后继续发布
 - `--login-only` 会在登录完成后停住
+- 当前项目里的公共“登录检查/补登录”入口暂时只支持视频号；下面四平台模板里只有视频号检查命令仍然有效
 
 强制规则：
 
@@ -177,21 +178,18 @@ ${OPENCLAW_PYTHON:-python3.12} upload.py --platform <platform> <video_path> --lo
 ### 抖音
 
 ```bash
-${OPENCLAW_PYTHON:-python3.12} scripts/platform_login.py --platform douyin --check-only
 ${OPENCLAW_PYTHON:-python3.12} upload.py --platform douyin "<视频路径>" "<标题>" "<文案>" "<标签1,标签2,...>"
 ```
 
 ### 小红书
 
 ```bash
-${OPENCLAW_PYTHON:-python3.12} scripts/platform_login.py --platform xiaohongshu --check-only
 ${OPENCLAW_PYTHON:-python3.12} upload.py --platform xiaohongshu "<视频路径>" "<标题>" "<文案>" "<标签1,标签2,...>"
 ```
 
 ### 快手
 
 ```bash
-${OPENCLAW_PYTHON:-python3.12} scripts/platform_login.py --platform kuaishou --check-only
 ${OPENCLAW_PYTHON:-python3.12} upload.py --platform kuaishou "<视频路径>" "<标题>" "<文案>" "<标签1,标签2,...>"
 ```
 
@@ -268,8 +266,8 @@ ${OPENCLAW_PYTHON:-python3.12} upload.py --platform shipinhao "<视频路径>" "
 5. 成功判定：
    - 必须看到 `视频发布成功`。
 6. 上传前先做登录检查：
-   - `python scripts/platform_login.py --platform douyin --check-only`
-   - 若检查失败，提醒用户登录并跳过当前平台。
+   - 当前公共登录检查入口暂不支持抖音，禁止继续引用 `scripts/platform_login.py --platform douyin --check-only`
+   - 若用户需要补登录，明确说明“当前项目的检查入口只支持视频号”，不要伪造抖音检查结果。
 
 ### 小红书
 
@@ -287,8 +285,8 @@ ${OPENCLAW_PYTHON:-python3.12} upload.py --platform shipinhao "<视频路径>" "
 5. 成功判定：
    - 必须看到 `视频发布成功`。
 6. 上传前先做登录检查：
-   - `python scripts/platform_login.py --platform xiaohongshu --check-only`
-   - 若检查失败，提醒用户登录并跳过当前平台。
+   - 当前公共登录检查入口暂不支持小红书，禁止继续引用 `scripts/platform_login.py --platform xiaohongshu --check-only`
+   - 若用户需要补登录，明确说明“当前项目的检查入口只支持视频号”，不要伪造小红书检查结果。
 
 ### 快手
 
@@ -308,8 +306,8 @@ ${OPENCLAW_PYTHON:-python3.12} upload.py --platform shipinhao "<视频路径>" "
 7. 成功判定：
    - 必须看到 `视频发布成功`。
 8. 上传前先做登录检查：
-   - `python scripts/platform_login.py --platform kuaishou --check-only`
-   - 若检查失败，提醒用户登录并跳过当前平台。
+   - 当前公共登录检查入口暂不支持快手，禁止继续引用 `scripts/platform_login.py --platform kuaishou --check-only`
+   - 若用户需要补登录，明确说明“当前项目的检查入口只支持视频号”，不要伪造快手检查结果。
 
 ### 视频号
 
@@ -349,19 +347,17 @@ ${OPENCLAW_PYTHON:-python3.12} upload.py --platform shipinhao "<视频路径>" "
 用法：
 
 ```bash
-python scripts/platform_login.py --platform douyin --check-only
 python scripts/platform_login.py --platform shipinhao
+python scripts/platform_login.py --platform shipinhao --check-only
 ```
 
 要求：
 
-1. 其他项目若要复用当前登录信息，必须沿用同一组端口和目录：
-   - 抖音 `9224` + `cookies/chrome_connect_dy`
-   - 小红书 `9223` + `cookies/chrome_connect_xhs`
-   - 快手 `9225` + `cookies/chrome_connect_ks`
+1. 当前脚本对外只保留视频号登录检查/补登录入口。
+2. 其他项目若要复用当前登录信息，必须沿用视频号这一组端口和目录：
    - 视频号 `9226` + `cookies/chrome_connect_sph`
-2. 其他项目先完成登录，再拿这套登录信息去上传。
-3. 若 `--check-only` 返回失败，不直接上传；批量任务里跳过该平台。
+3. 其他项目先完成登录，再拿这套登录信息去上传。
+4. 若 `--check-only` 返回失败，不直接上传；批量任务里跳过该平台。
 
 ## 视频号复用失败专项排障
 

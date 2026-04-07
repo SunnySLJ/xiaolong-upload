@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""桥接 auth skill 的平台登录检查/登录能力。"""
+"""桥接 auth skill 的平台登录检查/登录能力。
+
+当前 auth skill 只保留视频号登录检查/补登录入口；四平台上传能力仍各自保留。
+"""
 from __future__ import annotations
 
 import importlib.util

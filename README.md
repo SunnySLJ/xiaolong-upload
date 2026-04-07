@@ -114,6 +114,11 @@ longxia_upload/
 
 首次运行会打开 Chrome 扫码/验证登录，登录态保存在 `cookies/<平台>/` 目录。
 
+当前说明：
+
+- “登录检查 / 补登录 / 巡检” 这条公共入口当前只支持视频号
+- 四平台上传实现仍在仓库内，但不要再把 `scripts/platform_login.py` 视为其它平台的通用检查入口
+
 环境变量：`AUTH_MODE`（profile/connect/cookie）、`LOCAL_CHROME_PATH`、`CDP_DEBUG_PORT` 等。
 
 ## 说明文档

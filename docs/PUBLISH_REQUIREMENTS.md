@@ -79,8 +79,10 @@ ok = upload(
 1. 先做登录检查：
 
 ```bash
-python scripts/platform_login.py --platform <platform> --check-only
+python scripts/platform_login.py --platform shipinhao --check-only
 ```
+
+说明：当前项目的公共“登录检查/补登录”入口暂时只支持视频号；其它平台不要再引用 `scripts/platform_login.py --check-only` 作为标准流程。
 
 2. 若已登录，可直接调用：
 
@@ -98,12 +100,6 @@ python upload.py --platform <platform> <video_path> <title> <description> <tags>
 以下模板用于“已经登录完成，现等待用户确认发布”的场景。
 
 ### 抖音
-
-登录检查：
-
-```bash
-python scripts/platform_login.py --platform douyin --check-only
-```
 
 确认发布：
 
@@ -128,12 +124,6 @@ upload(
 
 ### 小红书
 
-登录检查：
-
-```bash
-python scripts/platform_login.py --platform xiaohongshu --check-only
-```
-
 确认发布：
 
 ```bash
@@ -156,12 +146,6 @@ upload(
 ```
 
 ### 快手
-
-登录检查：
-
-```bash
-python scripts/platform_login.py --platform kuaishou --check-only
-```
 
 确认发布：
 

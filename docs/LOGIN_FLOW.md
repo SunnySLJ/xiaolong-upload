@@ -109,11 +109,10 @@ xiaolong-upload/
 登录检查示例：
 
 ```bash
-python scripts/platform_login.py --platform douyin --check-only
-python scripts/platform_login.py --platform xiaohongshu --check-only
-python scripts/platform_login.py --platform kuaishou --check-only
 python scripts/platform_login.py --platform shipinhao --check-only
 ```
+
+备注：当前项目里 `scripts/platform_login.py` 的登录检查/补登录入口暂时只支持视频号，旧的抖音、小红书、快手检查示例不再适用。
 
 若需要打开专用登录窗口并等待用户完成登录：
 
@@ -124,7 +123,7 @@ python scripts/platform_login.py --platform shipinhao
 若用户无法连接桌面电脑，可由脚本生成二维码截图，再交给 OpenClaw 发到微信，并等待登录完成：
 
 ```bash
-python scripts/platform_login.py --platform kuaishou --notify-wechat
+python scripts/platform_login.py --platform shipinhao --notify-wechat
 ```
 
 说明：
