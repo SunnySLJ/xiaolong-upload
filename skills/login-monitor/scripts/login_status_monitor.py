@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""定时巡检四平台登录状态，并在失效时触发重新登录流程。"""
+"""定时巡检视频号登录状态，并在失效时触发重新登录流程。"""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +17,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from common.python_runtime import ensure_preferred_python_3_11
-from common.skill_runtime import resolve_project_root
 
 ensure_preferred_python_3_11()
 
@@ -36,22 +35,23 @@ def _load_auth_module():
 
 
 AUTH = _load_auth_module()
+CLI_PLATFORMS = ("shipinhao",)
 
 
 def _project_root(value: str | None) -> Path:
     if value:
         return Path(value).expanduser().resolve()
-    return resolve_project_root(SKILL_ROOT.parents[1])
+    return SKILL_ROOT.parents[1]
 
 
 def _normalize_platforms(values: list[str] | None) -> list[str]:
     if not values or values == ["all"]:
-        return list(AUTH.PLATFORMS.keys())
+        return list(CLI_PLATFORMS)
     result: list[str] = []
     for item in values:
         if item == "all":
-            return list(AUTH.PLATFORMS.keys())
-        if item not in AUTH.PLATFORMS:
+            return list(CLI_PLATFORMS)
+        if item not in CLI_PLATFORMS:
             raise ValueError(f"未知平台: {item}")
         if item not in result:
             result.append(item)
@@ -153,7 +153,7 @@ def _print_summary(summary: dict[str, Any]) -> None:
             print(f"      -> 已触发重新登录: {item.get('relogin_message', '')}")
     print("-" * 60)
     if summary["all_valid"]:
-        print("[SUMMARY] 四个平台登录状态正常")
+        print("[SUMMARY] 视频号登录状态正常")
     else:
         labels = [AUTH.PLATFORMS[name]["label"] for name in summary["expired_platforms"]]
         print(f"[SUMMARY] 登录失效平台: {', '.join(labels)}")
@@ -163,7 +163,7 @@ def _print_summary(summary: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="四平台登录状态巡检器")
+    parser = argparse.ArgumentParser(description="视频号登录状态巡检器")
     parser.add_argument(
         "--project-root",
         default="",
@@ -172,8 +172,8 @@ def main() -> int:
     parser.add_argument(
         "--platform",
         action="append",
-        choices=["all", *AUTH.PLATFORMS.keys()],
-        help="指定检查平台；可重复传入，默认 all",
+        choices=["all", *CLI_PLATFORMS],
+        help="指定检查平台；当前仅保留视频号，默认 all",
     )
     parser.add_argument(
         "--interval",

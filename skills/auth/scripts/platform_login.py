@@ -28,74 +28,73 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from common.python_runtime import ensure_preferred_python_3_11
-from common.skill_runtime import resolve_project_root
 
 ensure_preferred_python_3_11()
 
 
 PLATFORMS = {
-    "douyin": {
-        "label": "抖音",
-        "port": 9224,
-        "profile_dir": "chrome_connect_dy",
-        "url": "https://creator.douyin.com/creator-micro/content/upload",
-        "ready_markers": (
-            "creator.douyin.com/creator-micro/content/upload",
-            "creator.douyin.com/creator-micro/home",
-        ),
-        "login_markers": ("login", "passport", "扫码登录", "手机号登录"),
-        "qr_switch_texts": ("扫码登录",),
-        "required_cookie_names": (
-            "sessionid",
-            "sessionid_ss",
-            "sid_tt",
-            "uid_tt",
-            "sid_guard",
-        ),
-        "required_cookie_hits": 2,
-    },
-    "xiaohongshu": {
-        "label": "小红书",
-        "port": 9223,
-        "profile_dir": "chrome_connect_xhs",
-        "url": "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=video",
-        "ready_markers": (
-            "creator.xiaohongshu.com/publish/publish",
-            "creator.xiaohongshu.com/creator/home",
-            "creator.xiaohongshu.com/publish/notemanager",
-            "creator.xiaohongshu.com/content/upload",
-        ),
-        "login_markers": ("login", "短信登录", "扫码登录"),
-        "qr_switch_texts": ("扫码登录",),
-        "required_cookie_names": (
-            "galaxy_creator_session_id",
-            "access-token-creator.xiaohongshu.com",
-            "galaxy.creator.beaker.session.id",
-            "customer-sso-sid",
-            "x-user-id-creator.xiaohongshu.com",
-        ),
-        "required_cookie_hits": 2,
-    },
-    "kuaishou": {
-        "label": "快手",
-        "port": 9225,
-        "profile_dir": "chrome_connect_ks",
-        "url": "https://cp.kuaishou.com/article/publish/video",
-        "ready_markers": (
-            "cp.kuaishou.com/article/publish/video",
-            "cp.kuaishou.com/article/publish",
-            "cp.kuaishou.com/home",
-        ),
-        "login_markers": ("login", "passport", "扫码登录"),
-        "qr_switch_texts": ("扫码登录",),
-        "required_cookie_names": (
-            "kuaishou.web.cp.api_st",
-            "kuaishou.web.cp.api_ph",
-            "userId",
-            "bUserId",
-        ),
-        "required_cookie_hits": 2,
-    },
+    # "douyin": {
+    #     "label": "抖音",
+    #     "port": 9224,
+    #     "profile_dir": "chrome_connect_dy",
+    #     "url": "https://creator.douyin.com/creator-micro/content/upload",
+    #     "ready_markers": (
+    #         "creator.douyin.com/creator-micro/content/upload",
+    #         "creator.douyin.com/creator-micro/home",
+    #     ),
+    #     "login_markers": ("login", "passport", "扫码登录", "手机号登录"),
+    #     "qr_switch_texts": ("扫码登录",),
+    #     "required_cookie_names": (
+    #         "sessionid",
+    #         "sessionid_ss",
+    #         "sid_tt",
+    #         "uid_tt",
+    #         "sid_guard",
+    #     ),
+    #     "required_cookie_hits": 2,
+    # },
+    # "xiaohongshu": {
+    #     "label": "小红书",
+    #     "port": 9223,
+    #     "profile_dir": "chrome_connect_xhs",
+    #     "url": "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=video",
+    #     "ready_markers": (
+    #         "creator.xiaohongshu.com/publish/publish",
+    #         "creator.xiaohongshu.com/creator/home",
+    #         "creator.xiaohongshu.com/publish/notemanager",
+    #         "creator.xiaohongshu.com/content/upload",
+    #     ),
+    #     "login_markers": ("login", "短信登录", "扫码登录"),
+    #     "qr_switch_texts": ("扫码登录",),
+    #     "required_cookie_names": (
+    #         "galaxy_creator_session_id",
+    #         "access-token-creator.xiaohongshu.com",
+    #         "galaxy.creator.beaker.session.id",
+    #         "customer-sso-sid",
+    #         "x-user-id-creator.xiaohongshu.com",
+    #     ),
+    #     "required_cookie_hits": 2,
+    # },
+    # "kuaishou": {
+    #     "label": "快手",
+    #     "port": 9225,
+    #     "profile_dir": "chrome_connect_ks",
+    #     "url": "https://cp.kuaishou.com/article/publish/video",
+    #     "ready_markers": (
+    #         "cp.kuaishou.com/article/publish/video",
+    #         "cp.kuaishou.com/article/publish",
+    #         "cp.kuaishou.com/home",
+    #     ),
+    #     "login_markers": ("login", "passport", "扫码登录"),
+    #     "qr_switch_texts": ("扫码登录",),
+    #     "required_cookie_names": (
+    #         "kuaishou.web.cp.api_st",
+    #         "kuaishou.web.cp.api_ph",
+    #         "userId",
+    #         "bUserId",
+    #     ),
+    #     "required_cookie_hits": 2,
+    # },
     "shipinhao": {
         "label": "视频号",
         "port": 9226,
@@ -112,7 +111,6 @@ PLATFORMS = {
     },
 }
 
-# 本地登录检查入口当前只保留视频号；其他平台实现先保留，不在入口暴露。
 CLI_PLATFORMS = (
     # "douyin",
     # "xiaohongshu",
@@ -124,7 +122,7 @@ _PROJECT_ROOT_OVERRIDE: Path | None = None
 
 
 def project_root() -> Path:
-    return _PROJECT_ROOT_OVERRIDE or resolve_project_root(_PROJECT_ROOT)
+    return _PROJECT_ROOT_OVERRIDE or Path(__file__).resolve().parents[3]
 
 
 def chrome_path() -> str:
@@ -158,28 +156,20 @@ def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
 
 def close_connect_browser(platform_name: str, timeout: float = 8.0) -> bool:
     port = PLATFORMS[platform_name]["port"]
-    # 使用 ps 命令查找 Chrome 主进程（不是 renderer 子进程）
     try:
         result = subprocess.run(
-            ["ps", "aux"],
+            ["lsof", "-tiTCP:%d" % port, "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
             timeout=3,
         )
     except Exception:
         return False
-    
     pids = []
     for line in (result.stdout or "").splitlines():
-        # 查找包含 remote-debugging-port=PORT 的 Chrome 主进程
-        if f"--remote-debugging-port={port}" in line and "Google Chrome.app/Contents/MacOS/Google Chrome" in line:
-            # 跳过 Renderer  helper 进程
-            if "Helper" in line:
-                continue
-            parts = line.split()
-            if len(parts) >= 2 and parts[1].isdigit():
-                pids.append(int(parts[1]))
-    
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
     if not pids:
         return False
     for pid in sorted(set(pids)):
@@ -247,18 +237,18 @@ async def _cdp_runtime_evaluate(ws_url: str, expression: str, timeout: float = 5
                 return msg.get("result", {}).get("result", {}).get("value")
 
 
-def _has_required_login_cookies(platform_name: str, tab: dict, base_url: str | None = None) -> bool:
+def _has_required_login_cookies(platform_name: str, tab: dict) -> bool:
     cfg = PLATFORMS[platform_name]
     cookie_names = tuple(cfg.get("required_cookie_names", ()))
     min_hits = int(cfg.get("required_cookie_hits", 0) or 0)
     if not cookie_names or min_hits <= 0:
         return True
     ws_url = tab.get("webSocketDebuggerUrl") or ""
-    cookie_url = base_url or tab.get("url") or cfg["url"]
-    if not ws_url or not cookie_url:
+    base_url = tab.get("url") or cfg["url"]
+    if not ws_url or not base_url:
         return False
     try:
-        cookies = asyncio.run(_cdp_fetch_cookies(ws_url, cookie_url, timeout=5.0))
+        cookies = asyncio.run(_cdp_fetch_cookies(ws_url, base_url, timeout=5.0))
     except Exception:
         return False
     names = {
@@ -268,15 +258,6 @@ def _has_required_login_cookies(platform_name: str, tab: dict, base_url: str | N
     }
     hits = sum(1 for name in cookie_names if name in names)
     return hits >= min_hits
-
-
-def _find_reusable_session_by_cookies(platform_name: str, tabs: list[dict]) -> dict | None:
-    cfg = PLATFORMS[platform_name]
-    page_tabs = [tab for tab in tabs if tab.get("type") == "page"]
-    for tab in page_tabs:
-        if _has_required_login_cookies(platform_name, tab, base_url=cfg["url"]):
-            return tab
-    return None
 
 
 def ensure_page_target(platform_name: str, retries: int = 3, wait_seconds: float = 1.0) -> list[dict]:
@@ -293,14 +274,10 @@ def ensure_page_target(platform_name: str, retries: int = 3, wait_seconds: float
     return tabs
 
 
-def open_target_tab(platform_name: str, force_new: bool = False) -> bool:
-    """打开目标平台标签页
-    
-    :param force_new: 是否强制打开新标签页（即使已有标签页存在）
-    """
+def open_target_tab(platform_name: str) -> bool:
     port = PLATFORMS[platform_name]["port"]
     tabs = devtools_tabs(port)
-    if not force_new and any(tab.get("type") == "page" for tab in tabs):
+    if any(tab.get("type") == "page" for tab in tabs):
         return False
     url = PLATFORMS[platform_name]["url"]
     encoded = urllib.parse.quote(url, safe=":/?&=%")
@@ -1799,90 +1776,7 @@ def _post_revival_stabilize(platform_name: str) -> None:
     time.sleep(2.0)
 
 
-def auto_recover_session(
-    platform_name: str,
-    root: Path | None = None,
-    timeout: float = 15.0,
-) -> tuple[bool, str]:
-    """
-    自动恢复平台会话
-    当 check_platform_login 返回 False 时调用此函数尝试恢复
-    流程：启动 Chrome → 打开目标页 → 等待就绪
-    返回：(是否成功，消息)
-    """
-    root = root or project_root()
-    cfg = PLATFORMS[platform_name]
-    label = cfg["label"]
-    
-    # 检查 profile 目录是否存在
-    profile_dir = profile_dir_for(platform_name, root)
-    if not profile_dir.exists():
-        return False, f"{label} 还没有登录目录，需要先扫码登录"
-    
-    # 检查端口是否监听
-    if is_port_listening(cfg["port"]):
-        # 端口已监听，只需打开目标页面
-        tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
-        if tabs:
-            for tab in tabs:
-                if _tab_is_logged_in(platform_name, tab):
-                    return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
-        # 打开目标页面
-        open_target_tab(platform_name)
-        time.sleep(2)
-        tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
-        if tabs:
-            for tab in tabs:
-                if _tab_is_logged_in(platform_name, tab):
-                    return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
-        return False, f"{label} 端口已监听但未找到已登录页面"
-    
-    # 端口未监听，需要启动 Chrome
-    print(f"   🔄 {label} 端口 {cfg['port']} 未监听，正在启动 Chrome...")
-    try:
-        launch_connect_chrome(platform_name, root)
-    except Exception as e:
-        return False, f"{label} 启动 Chrome 失败：{e}"
-    
-    # 等待端口监听
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if is_port_listening(cfg["port"]):
-            break
-        time.sleep(0.3)
-    else:
-        return False, f"{label} 启动 Chrome 后端口仍未监听"
-    
-    # 打开目标页面
-    print(f"   📑 打开 {label} 目标页面...")
-    open_target_tab(platform_name)
-    time.sleep(3)
-    
-    # 检查页面是否就绪
-    tabs = ensure_page_target(platform_name, retries=3, wait_seconds=1.0)
-    if not tabs:
-        return False, f"{label} 无法打开目标页面"
-    
-    # 检查是否已登录
-    for tab in tabs:
-        if _tab_is_logged_in(platform_name, tab):
-            return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
-    
-    # 页面已打开但可能还在加载，等待一下再检查
-    time.sleep(2)
-    tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
-    for tab in tabs:
-        if _tab_is_logged_in(platform_name, tab):
-            return True, f"{label} 已登录，可复用：{tab.get('url', '')}"
-    
-    return False, f"{label} 页面已打开但检测到未登录状态"
-
-
-def check_platform_login(
-    platform_name: str,
-    root: Path | None = None,
-    passive: bool = False,
-) -> tuple[bool, str]:
+def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[bool, str]:
     root = root or project_root()
     cfg = PLATFORMS[platform_name]
     profile_dir = profile_dir_for(platform_name, root)
@@ -1890,8 +1784,6 @@ def check_platform_login(
     if not is_port_listening(cfg["port"]):
         if not profile_dir.exists():
             return False, f"{cfg['label']} 还没有登录目录: {profile_dir}"
-        # profile 目录存在，说明之前登录过，尝试启动 Chrome 检查 cookies
-        # 注意：即使 passive=True 也会启动，因为"浏览器没开"≠"登录失效"
         tabs = _revive_connect_session_for_check(platform_name, root)
         if not tabs:
             return False, f"{cfg['label']} connect 端口 {cfg['port']} 未监听，且无法恢复本地会话"
@@ -1899,10 +1791,8 @@ def check_platform_login(
         tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
         revived = True
     else:
-        tabs = devtools_tabs(cfg["port"]) if passive else ensure_page_target(platform_name)
+        tabs = ensure_page_target(platform_name)
     if not tabs:
-        if passive:
-            return False, f"{cfg['label']} connect Chrome 当前没有可复用标签页"
         return False, f"{cfg['label']} connect Chrome 没有可复用标签页"
     for tab in tabs:
         if _tab_is_logged_in(platform_name, tab):
@@ -1910,68 +1800,12 @@ def check_platform_login(
                 return True, f"{cfg['label']} 已登录，可复用外部 connect 会话: {tab.get('url', '')}"
             suffix = "（已自动恢复本地会话）" if revived else ""
             return True, f"{cfg['label']} 已登录，可复用{suffix}: {tab.get('url', '')}"
-    if passive:
-        cookie_tab = _find_reusable_session_by_cookies(platform_name, tabs)
-        if cookie_tab:
-            cookie_url = cookie_tab.get("url") or ""
-            return True, f"{cfg['label']} 已检测到本地可复用会话 cookie: {cookie_url}"
-        return False, f"{cfg['label']} 当前未发现可直接复用的已登录页面"
     open_target_tab(platform_name)
     time.sleep(1)
     for tab in ensure_page_target(platform_name, retries=1):
         if _tab_is_logged_in(platform_name, tab):
             return True, f"{cfg['label']} 已登录，可复用: {tab.get('url', '')}"
     return False, f"{cfg['label']} 当前仍停在登录页"
-
-
-def force_platform_login(
-    platform_name: str,
-    timeout: int = 300,
-    notify_wechat: bool = False,
-) -> tuple[bool, str]:
-    """强制重新登录，跳过检查直接打开登录页获取二维码"""
-    root = project_root()
-    cfg = PLATFORMS[platform_name]
-    
-    # 确保浏览器已启动
-    if not is_port_listening(cfg["port"]):
-        launch_connect_chrome(platform_name, root)
-        deadline = time.time() + 20
-        while time.time() < deadline:
-            if is_port_listening(cfg["port"]):
-                break
-            time.sleep(0.25)
-    
-    # 打开登录页（强制打开，不复用现有标签页）
-    open_target_tab(platform_name, force_new=True)
-    
-    # 获取二维码截图
-    time.sleep(2)  # 等待页面加载
-    screenshot_path = capture_login_screenshot(platform_name, root)
-    if screenshot_path:
-        print(f"{cfg['label']} 登录二维码已保存：{screenshot_path}")
-        if notify_wechat:
-            if send_wechat_notification(platform_name, screenshot_path):
-                print(f"{cfg['label']} 登录二维码已发送到微信")
-            else:
-                print(f"{cfg['label']} 登录二维码发送到微信失败")
-    else:
-        print(f"{cfg['label']} 登录页已打开，但本次未提取到二维码图片")
-    
-    last_qr_refresh = time.time()
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        ok, msg = check_platform_login(platform_name, root)
-        if ok:
-            return True, msg
-        if time.time() - last_qr_refresh >= 120:
-            screenshot_path = capture_login_screenshot(platform_name, root)
-            if screenshot_path:
-                print(f"{cfg['label']} 登录二维码已刷新：{screenshot_path}")
-            last_qr_refresh = time.time()
-        time.sleep(3)
-    return False, f"{cfg['label']} 登录超时，请稍后重试"
 
 
 def ensure_platform_login(
@@ -2020,12 +1854,11 @@ def ensure_platform_login(
 
 
 def _main() -> int:
-    parser = argparse.ArgumentParser(description="四平台 connect 登录助手（auth skill 版，单次只处理一个平台）")
-    parser.add_argument("--platform", required=True, choices=CLI_PLATFORMS, help="目标平台；当前入口只保留视频号")
+    parser = argparse.ArgumentParser(description="视频号 connect 登录助手（auth skill 版，单次只处理一个平台）")
+    parser.add_argument("--platform", required=True, choices=CLI_PLATFORMS, help="目标平台；当前仅保留视频号入口")
     parser.add_argument("--check-only", action="store_true", help="仅检查当前登录是否可复用")
     parser.add_argument("--close-after-check", action="store_true", help="仅检查时在返回结果后关闭当前平台 connect Chrome")
     parser.add_argument("--notify-wechat", action="store_true", help="登录页打开后把二维码发送到微信")
-    parser.add_argument("--force-login", action="store_true", help="强制重新登录，跳过检查直接打开登录页")
     parser.add_argument("--timeout", type=int, default=300, help="等待登录超时时间（秒）")
     parser.add_argument("--project-root", default="", help="项目根目录；不传则默认取当前仓库")
     args = parser.parse_args()
@@ -2036,16 +1869,9 @@ def _main() -> int:
 
     if args.check_only:
         ok, msg = check_platform_login(args.platform)
-        # 检测完自动关闭浏览器
-        closed = close_connect_browser(args.platform)
-        msg = f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 已关闭" if closed else f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 未关闭（可能本来就未启动）"
-    elif args.force_login:
-        # 强制重新登录，跳过检查
-        ok, msg = force_platform_login(
-            args.platform,
-            timeout=args.timeout,
-            notify_wechat=args.notify_wechat,
-        )
+        if args.close_after_check:
+            closed = close_connect_browser(args.platform)
+            msg = f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 已关闭" if closed else f"{msg}\n{PLATFORMS[args.platform]['label']} connect Chrome 未关闭（可能本来就未启动）"
     else:
         ok, msg = ensure_platform_login(
             args.platform,
