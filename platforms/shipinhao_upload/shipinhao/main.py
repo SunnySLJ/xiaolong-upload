@@ -678,6 +678,86 @@ def _js_neutralize_publish_overlays() -> str:
     """
 
 
+def _js_focus_publish_button_and_press_enter() -> str:
+    return """
+    (() => {
+        const labels = new Set(["发表", "发布", "视频发表", "立即发表", "发布视频"]);
+        const seen = new Set();
+        let best = null;
+
+        function textOf(el) {
+            return (el && (el.innerText || el.textContent || "") || "").replace(/\\s+/g, " ").trim();
+        }
+
+        function visible(el) {
+            if (!el || !el.isConnected) return false;
+            const style = window.getComputedStyle(el);
+            if (!style || style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") === 0) {
+                return false;
+            }
+            const rect = el.getBoundingClientRect();
+            return rect.width >= 40 && rect.height >= 24 && rect.bottom > 0 && rect.right > 0;
+        }
+
+        function disabled(el) {
+            return !!(
+                el.disabled ||
+                el.getAttribute("disabled") !== null ||
+                el.getAttribute("aria-disabled") === "true" ||
+                /disabled|ban/.test((el.className || "").toString())
+            );
+        }
+
+        function visit(root, depth) {
+            if (!root || depth > 4 || seen.has(root)) return;
+            seen.add(root);
+            let elements = [];
+            try {
+                elements = root.querySelectorAll("button, [role=button], .weui-desktop-btn, .weui-desktop-btn_primary, div, span, a");
+            } catch (e) {}
+            for (const el of elements) {
+                const text = textOf(el);
+                if (!labels.has(text) || !visible(el) || disabled(el)) continue;
+                const rect = el.getBoundingClientRect();
+                const primary = /primary|publish|submit|weui-desktop-btn_primary/.test((el.className || "").toString()) ? 1 : 0;
+                const exactPublish = text === "发表" ? 1 : 0;
+                const score = exactPublish * 1000 + primary * 200 + Math.round(rect.bottom) + Math.round(rect.right / 10);
+                if (!best || score > best.score) {
+                    best = { el, text, score };
+                }
+            }
+            try {
+                root.querySelectorAll("iframe").forEach((frame) => {
+                    try { if (frame.contentDocument) visit(frame.contentDocument, depth + 1); } catch (e) {}
+                });
+            } catch (e) {}
+            try {
+                root.querySelectorAll("*").forEach((el) => {
+                    if (el.shadowRoot) visit(el.shadowRoot, depth + 1);
+                });
+            } catch (e) {}
+        }
+
+        visit(document, 0);
+        if (!best || !best.el) {
+            return JSON.stringify({ clicked: false, reason: "not_found" });
+        }
+
+        const el = best.el;
+        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch (e) {}
+        try { el.focus(); } catch (e) {}
+        try {
+            el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", code: "Enter" }));
+            el.dispatchEvent(new KeyboardEvent("keypress", { bubbles: true, cancelable: true, key: "Enter", code: "Enter" }));
+            el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "Enter", code: "Enter" }));
+            return JSON.stringify({ clicked: true, text: best.text, mode: "keyboard_enter", score: best.score });
+        } catch (e) {
+            return JSON.stringify({ clicked: false, reason: "keyboard_failed", text: best.text, score: best.score, error: String(e) });
+        }
+    })()
+    """
+
+
 async def _click_via_cdp(tab, rect: dict) -> bool:
     try:
         from nodriver import cdp
@@ -690,6 +770,20 @@ async def _click_via_cdp(tab, rect: dict) -> bool:
     except Exception as e:
         shipinhao_logger.warning(f"[-] CDP 鼠标点击失败：{e}")
         return False
+
+
+async def _wait_publish_submission_state(tab, checks: int = 20, delay: float = 0.3) -> bool:
+    for _ in range(checks):
+        await tab.sleep(delay)
+        state = _normalize_eval_payload(await tab.evaluate(_js_publish_submission_state(), return_by_value=True))
+        url = (state.get("url") or "").lower()
+        if state.get("hasSuccessText") or state.get("hasLoadingText"):
+            return True
+        if "success" in url or "post/list" in url or "content" in url:
+            return True
+        if state.get("buttonVisible") and state.get("buttonDisabled"):
+            return True
+    return False
 
 
 async def _click_publish_button(tab) -> tuple[bool, str]:
@@ -709,6 +803,7 @@ async def _click_publish_button(tab) -> tuple[bool, str]:
         attempts.append(("cdp", rect))
     attempts.append(("dom", None))
     attempts.append(("native", None))
+    attempts.append(("keyboard", None))
 
     for mode, mode_rect in attempts:
         if mode == "cdp":
@@ -716,6 +811,8 @@ async def _click_publish_button(tab) -> tuple[bool, str]:
             click_payload = {"clicked": clicked, "text": clicked_text}
         elif mode == "dom":
             click_payload = _normalize_eval_payload(await tab.evaluate(_js_click_publish_button(False), return_by_value=True))
+        elif mode == "keyboard":
+            click_payload = _normalize_eval_payload(await tab.evaluate(_js_focus_publish_button_and_press_enter(), return_by_value=True))
         else:
             click_payload = _normalize_eval_payload(await tab.evaluate(_js_click_publish_button(True), return_by_value=True))
 
@@ -723,21 +820,59 @@ async def _click_publish_button(tab) -> tuple[bool, str]:
             continue
 
         clicked_text = click_payload.get("text") or clicked_text
-        for _ in range(20):
-            await tab.sleep(0.3)
-            state = _normalize_eval_payload(await tab.evaluate(_js_publish_submission_state(), return_by_value=True))
-            url = (state.get("url") or "").lower()
-            if state.get("hasSuccessText") or state.get("hasLoadingText"):
-                return True, clicked_text
-            if "success" in url or "post/list" in url or "content" in url:
-                return True, clicked_text
-            if state.get("buttonVisible") and state.get("buttonDisabled"):
-                return True, clicked_text
+        if await _wait_publish_submission_state(tab):
+            return True, clicked_text
         try:
             await tab.evaluate(_js_neutralize_publish_overlays(), return_by_value=True)
         except Exception:
             pass
     return False, f"按钮“{clicked_text}”未进入提交态"
+
+
+async def _prepare_publish_retry(tab, aggressive: bool = False) -> None:
+    try:
+        await tab.evaluate(_js_neutralize_publish_overlays(), return_by_value=True)
+    except Exception:
+        pass
+
+    scroll_times = 5 if aggressive else 3
+    for _ in range(scroll_times):
+        try:
+            await tab.evaluate("""
+                window.scrollTo(0, 9e9);
+                document.documentElement.scrollTop = 9e9;
+                document.body && (document.body.scrollTop = 9e9);
+            """)
+            await tab.sleep(0.4 if aggressive else 0.3)
+        except Exception:
+            pass
+
+
+async def _publish_with_three_layer_fallback(browser, tab) -> tuple[bool, str, object]:
+    layers = [
+        ("第一层", "当前页直接点击", tab, False),
+        ("第二层", "当前页滚动到底并强力重试", tab, True),
+    ]
+
+    current_tab = tab
+    for layer_name, layer_desc, target_tab, aggressive in layers:
+        await _prepare_publish_retry(target_tab, aggressive=aggressive)
+        clicked, publish_message = await _click_publish_button(target_tab)
+        if clicked:
+            return True, f"{layer_name}成功：{layer_desc}，按钮「{publish_message or '发表'}」", target_tab
+        shipinhao_logger.warning(f"[-] Step 5 {layer_name}未进入提交态：{publish_message}")
+
+    recovered_tab = await _recover_shipinhao_tab(browser)
+    if recovered_tab is not None:
+        current_tab = recovered_tab
+        shipinhao_logger.warning("[-] Step 5 第三层：已恢复标签页，准备最终重试")
+        await _prepare_publish_retry(current_tab, aggressive=True)
+        clicked, publish_message = await _click_publish_button(current_tab)
+        if clicked:
+            return True, f"第三层成功：恢复标签页后按钮「{publish_message or '发表'}」", current_tab
+        return False, f"第三层失败：{publish_message}", current_tab
+
+    return False, "第三层失败：无法恢复发布标签页", current_tab
 
 
 async def _recover_shipinhao_tab(browser):
@@ -776,12 +911,7 @@ async def _confirm_publish_result(browser, tab, title: str) -> bool:
                     shipinhao_logger.success("[-] 视频发表成功（列表页已出现本次标题）")
                     return True
                 if list_page_checks >= max_list_page_checks:
-                    shipinhao_logger.success(
-                        f"[-] 已进入列表页，平台标题尚未刷新；按发布完成处理（列表页检查 {max_list_page_checks} 次）"
-                    )
                     return True
-                if list_page_checks == 1:
-                    shipinhao_logger.info("[-] 已进入列表页，等待平台刷新标题...")
                 continue
             if (
                 await _has_text(current_tab, "发表成功", timeout=1)
@@ -1106,25 +1236,12 @@ class ShipinhaoVideo(object):
                 shipinhao_logger.debug(f"填充失败：{e}")
 
             shipinhao_logger.info("[-] Step 5: 点击发表...")
-
-            async def _scroll_bottom():
-                try:
-                    await tab.evaluate("""
-                        window.scrollTo(0, 9e9);
-                        document.documentElement.scrollTop = 9e9;
-                    """)
-                    await tab.sleep(0.4)
-                except Exception:
-                    pass
-
-            for _ in range(3):
-                await _scroll_bottom()
-
-            clicked, publish_message = await _click_publish_button(tab)
+            clicked, publish_message, submit_tab = await _publish_with_three_layer_fallback(browser, tab)
             if not clicked:
                 shipinhao_logger.error(f"[-] Step 5 失败：{publish_message}")
                 return False
-            shipinhao_logger.info(f"[-] Step 5 完成：已点击「{publish_message or '发表'}」")
+            tab = submit_tab or tab
+            shipinhao_logger.info(f"[-] Step 5 完成：{publish_message}")
 
             await tab.sleep(1)
             publish_confirmed = await _confirm_publish_result(browser, tab, self.title)
