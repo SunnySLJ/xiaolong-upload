@@ -10,6 +10,7 @@ Current project policy: login checking/relogin is only exposed for Shipinhao.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -30,8 +31,15 @@ def _load_auth_module():
 _AUTH = _load_auth_module()
 
 
+def _default_root() -> Path:
+    env_root = (os.environ.get("OPENCLAW_UPLOAD_ROOT") or "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return PROJECT_ROOT.resolve()
+
+
 def check_platform_login(platform_name: str, root: Path | None = None, passive: bool = False):
-    actual_root = (root or PROJECT_ROOT).resolve()
+    actual_root = (root or _default_root()).resolve()
     _AUTH._PROJECT_ROOT_OVERRIDE = actual_root
     return _AUTH.check_platform_login(platform_name, actual_root, passive=passive)
 
@@ -43,7 +51,7 @@ def ensure_platform_login(
     notify_wechat: bool = False,
     root: Path | None = None,
 ):
-    actual_root = (root or PROJECT_ROOT).resolve()
+    actual_root = (root or _default_root()).resolve()
     _AUTH._PROJECT_ROOT_OVERRIDE = actual_root
     return _AUTH.ensure_platform_login(
         platform_name,
@@ -61,7 +69,7 @@ def __getattr__(name: str):
 
 
 def _main() -> int:
-    _AUTH._PROJECT_ROOT_OVERRIDE = PROJECT_ROOT
+    _AUTH._PROJECT_ROOT_OVERRIDE = _default_root()
     return _AUTH._main()
 
 

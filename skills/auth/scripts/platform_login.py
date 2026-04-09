@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import platform as sys_platform
+import re
 import signal
 import socket
 import subprocess
@@ -127,7 +128,12 @@ _PROJECT_ROOT_OVERRIDE: Path | None = None
 
 
 def project_root() -> Path:
-    return _PROJECT_ROOT_OVERRIDE or Path(__file__).resolve().parents[3]
+    if _PROJECT_ROOT_OVERRIDE is not None:
+        return _PROJECT_ROOT_OVERRIDE.resolve()
+    env_root = (os.environ.get("OPENCLAW_UPLOAD_ROOT") or "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return Path(__file__).resolve().parents[3]
 
 
 def chrome_path() -> str:
@@ -159,27 +165,154 @@ def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def close_connect_browser(platform_name: str, timeout: float = 8.0) -> bool:
-    port = PLATFORMS[platform_name]["port"]
+def _list_listening_pids(port: int) -> list[int]:
+    system = sys_platform.system()
     try:
-        result = subprocess.run(
-            ["lsof", "-tiTCP:%d" % port, "-sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
+        if system == "Windows":
+            result = _run_text_command(
+                ["netstat", "-ano", "-p", "tcp"],
+                timeout=3,
+            )
+            pids: list[int] = []
+            for line in (result.stdout or "").splitlines():
+                parts = line.split()
+                if len(parts) < 5 or parts[0].upper() != "TCP":
+                    continue
+                if parts[1].rsplit(":", 1)[-1] != str(port):
+                    continue
+                if parts[3].upper() != "LISTENING":
+                    continue
+                if parts[4].isdigit():
+                    pids.append(int(parts[4]))
+            return sorted(set(pids))
+
+        result = _run_text_command(
+            ["lsof", f"-tiTCP:{port}", "-sTCP:LISTEN"],
             timeout=3,
         )
     except Exception:
-        return False
-    pids = []
+        return []
+
+    pids: list[int] = []
     for line in (result.stdout or "").splitlines():
         line = line.strip()
         if line.isdigit():
             pids.append(int(line))
+    return sorted(set(pids))
+
+
+def _normalize_compare_path(value: str | Path) -> str:
+    path = Path(value).expanduser()
+    try:
+        normalized = path.resolve()
+    except Exception:
+        normalized = path
+    result = str(normalized)
+    if sys_platform.system() == "Windows":
+        result = result.lower()
+    return result.rstrip("\\/")
+
+
+def _extract_user_data_dir(command_line: str) -> str:
+    if not command_line:
+        return ""
+    patterns = (
+        r'--user-data-dir="([^"]+)"',
+        r"--user-data-dir='([^']+)'",
+        r"--user-data-dir=([^\s]+)",
+        r'--user-data-dir\s+"([^"]+)"',
+        r"--user-data-dir\s+'([^']+)'",
+        r"--user-data-dir\s+([^\s]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, command_line)
+        if match:
+            return (match.group(1) or "").strip()
+    return ""
+
+
+def _process_command_line(pid: int) -> str:
+    system = sys_platform.system()
+    try:
+        if system == "Windows":
+            result = _run_text_command(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\").CommandLine",
+                ],
+                timeout=6,
+            )
+            return (result.stdout or "").strip()
+        result = _run_text_command(["ps", "-p", str(pid), "-o", "command="], timeout=6)
+        return (result.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def validate_connect_profile_dir(
+    platform_name: str,
+    root: Path | None = None,
+) -> tuple[bool, str]:
+    actual_root = (root or project_root()).resolve()
+    expected_dir = profile_dir_for(platform_name, actual_root)
+    expected_norm = _normalize_compare_path(expected_dir)
+    cfg = PLATFORMS[platform_name]
+
+    if expected_dir.exists() and not expected_dir.is_dir():
+        return False, f"{cfg['label']} 登录目录不是文件夹: {expected_dir}"
+
+    if not is_port_listening(cfg["port"]):
+        return True, f"{cfg['label']} connect 端口 {cfg['port']} 当前未监听，预期目录: {expected_dir}"
+
+    pids = _list_listening_pids(cfg["port"])
+    if not pids:
+        return False, f"{cfg['label']} connect 端口 {cfg['port']} 正在监听，但无法定位监听进程"
+
+    checked_cmdline = False
+    mismatches: list[str] = []
+    for pid in pids:
+        command_line = _process_command_line(pid)
+        if not command_line:
+            continue
+        checked_cmdline = True
+        actual_dir = _extract_user_data_dir(command_line)
+        if not actual_dir:
+            mismatches.append(f"pid={pid} 未发现 --user-data-dir")
+            continue
+        actual_norm = _normalize_compare_path(actual_dir)
+        if actual_norm == expected_norm:
+            return True, f"{cfg['label']} connect 目录校验通过: {expected_dir}"
+        mismatches.append(f"pid={pid} 使用 {actual_dir}")
+
+    if checked_cmdline:
+        detail = "；".join(mismatches) if mismatches else "未解析到有效的 --user-data-dir"
+        return False, (
+            f"{cfg['label']} connect 目录不匹配，预期应为 {expected_dir}，"
+            f"实际监听进程为: {detail}"
+        )
+
+    return False, f"{cfg['label']} 无法读取 9226 监听进程命令行，不能确认登录目录是否正确"
+
+
+def close_connect_browser(platform_name: str, timeout: float = 8.0) -> bool:
+    port = PLATFORMS[platform_name]["port"]
+    pids = _list_listening_pids(port)
     if not pids:
         return False
+    system = sys_platform.system()
     for pid in sorted(set(pids)):
         try:
-            os.kill(pid, signal.SIGTERM)
+            if system == "Windows":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            else:
+                os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             continue
         except Exception:
@@ -196,6 +329,29 @@ def _devtools_get(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": "platform-login-helper"})
     with urllib.request.urlopen(req, timeout=2) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _run_node(command: list[str], timeout: int, check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        command,
+        check=check,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
+
+
+def _run_text_command(command: list[str], timeout: int = 5) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
 
 
 def devtools_tabs(port: int) -> list[dict]:
@@ -547,11 +703,9 @@ ws.addEventListener("open", async () => {
             if not ws_url:
                 continue
             try:
-                subprocess.run(
+                _run_node(
                     ["node", "-e", douyin_script, ws_url, output_path],
                     check=True,
-                    capture_output=True,
-                    text=True,
                     timeout=20,
                 )
             except Exception:
@@ -681,11 +835,9 @@ ws.addEventListener("open", async () => {
             if not ws_url:
                 continue
             try:
-                subprocess.run(
+                _run_node(
                     ["node", "-e", xiaohongshu_script, ws_url, output_path],
                     check=True,
-                    capture_output=True,
-                    text=True,
                     timeout=20,
                 )
             except Exception:
@@ -927,11 +1079,9 @@ ws.addEventListener("open", async () => {
             if not ws_url:
                 continue
             try:
-                subprocess.run(
+                _run_node(
                     ["node", "-e", kuaishou_script, ws_url, output_path],
                     check=True,
-                    capture_output=True,
-                    text=True,
                     timeout=20,
                 )
             except Exception:
@@ -1109,11 +1259,9 @@ ws.addEventListener("open", async () => {
             if not ws_url:
                 continue
             try:
-                subprocess.run(
+                _run_node(
                     ["node", "-e", shipinhao_script, ws_url, output_path],
                     check=True,
-                    capture_output=True,
-                    text=True,
                     timeout=20,
                 )
             except Exception:
@@ -1279,11 +1427,9 @@ ws.addEventListener("open", async () => {
         if not ws_url:
             continue
         try:
-            subprocess.run(
+            _run_node(
                 ["node", "-e", node_script, ws_url, output_path, platform_name],
                 check=True,
-                capture_output=True,
-                text=True,
                 timeout=20,
             )
         except Exception:
@@ -1412,10 +1558,8 @@ ws.addEventListener("open", async () => {
 """
                 last_payload = {}
                 for _ in range(3):
-                    result = subprocess.run(
+                    result = _run_node(
                         ["node", "-e", node_script, ws_url],
-                        capture_output=True,
-                        text=True,
                         timeout=10,
                     )
                     payload = json.loads((result.stdout or "").strip() or "{}")
@@ -1541,10 +1685,8 @@ ws.addEventListener("open", async () => {
 """
                 last_payload = {}
                 for _ in range(3):
-                    result = subprocess.run(
+                    result = _run_node(
                         ["node", "-e", node_script, ws_url],
-                        capture_output=True,
-                        text=True,
                         timeout=10,
                     )
                     payload = json.loads((result.stdout or "").strip() or "{}")
@@ -1712,10 +1854,8 @@ ws.addEventListener("open", async () => {
 """
                 last_payload = {}
                 for _ in range(3):
-                    result = subprocess.run(
+                    result = _run_node(
                         ["node", "-e", node_script, ws_url],
-                        capture_output=True,
-                        text=True,
                         timeout=10,
                     )
                     payload = json.loads((result.stdout or "").strip() or "{}")
@@ -1781,30 +1921,46 @@ def _post_revival_stabilize(platform_name: str) -> None:
     time.sleep(2.0)
 
 
-def check_platform_login(platform_name: str, root: Path | None = None) -> tuple[bool, str]:
-    root = root or project_root()
+def check_platform_login(
+    platform_name: str,
+    root: Path | None = None,
+    passive: bool = False,
+) -> tuple[bool, str]:
+    root = (root or project_root()).resolve()
     cfg = PLATFORMS[platform_name]
     profile_dir = profile_dir_for(platform_name, root)
     revived = False
+    profile_ok, profile_msg = validate_connect_profile_dir(platform_name, root)
+    if is_port_listening(cfg["port"]) and not profile_ok:
+        return False, profile_msg
     if not is_port_listening(cfg["port"]):
         if not profile_dir.exists():
             return False, f"{cfg['label']} 还没有登录目录: {profile_dir}"
+        if passive:
+            return False, f"{cfg['label']} connect 端口 {cfg['port']} 未监听；预期目录: {profile_dir}"
         tabs = _revive_connect_session_for_check(platform_name, root)
         if not tabs:
             return False, f"{cfg['label']} connect 端口 {cfg['port']} 未监听，且无法恢复本地会话"
+        profile_ok, profile_msg = validate_connect_profile_dir(platform_name, root)
+        if not profile_ok:
+            return False, profile_msg
         _post_revival_stabilize(platform_name)
         tabs = ensure_page_target(platform_name, retries=2, wait_seconds=0.8)
         revived = True
     else:
-        tabs = ensure_page_target(platform_name)
+        tabs = devtools_tabs(cfg["port"]) if passive else ensure_page_target(platform_name)
     if not tabs:
+        if passive:
+            return False, f"{cfg['label']} connect Chrome 当前没有可复用标签页"
         return False, f"{cfg['label']} connect Chrome 没有可复用标签页"
     for tab in tabs:
         if _tab_is_logged_in(platform_name, tab):
             if not profile_dir.exists():
                 return True, f"{cfg['label']} 已登录，可复用外部 connect 会话: {tab.get('url', '')}"
             suffix = "（已自动恢复本地会话）" if revived else ""
-            return True, f"{cfg['label']} 已登录，可复用{suffix}: {tab.get('url', '')}"
+            return True, f"{cfg['label']} 已登录，可复用{suffix}: {tab.get('url', '')} | 目录: {profile_dir}"
+    if passive:
+        return False, f"{cfg['label']} 当前 connect 会话不可直接复用"
     open_target_tab(platform_name)
     time.sleep(1)
     for tab in ensure_page_target(platform_name, retries=1):
@@ -1856,6 +2012,15 @@ def ensure_platform_login(
             last_qr_refresh = time.time()
         time.sleep(3)
     return False, f"{cfg['label']} 登录超时，请稍后重试"
+
+
+def login_instruction(platform_name: str, root: Path | None = None) -> str:
+    actual_root = (root or project_root()).resolve()
+    script = actual_root / "scripts" / "platform_login.py"
+    return (
+        f"{PLATFORMS[platform_name]['label']} 当前不可复用，请先重新登录。\n"
+        f"命令: python {script} --platform {platform_name}"
+    )
 
 
 def _main() -> int:

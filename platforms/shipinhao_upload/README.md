@@ -49,7 +49,7 @@ upload(
 
 ```bash
 # Mac
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome_sph
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9226 --user-data-dir=/path/to/xiaolong-upload/cookies/chrome_connect_sph
 
 # 然后运行上传
 python upload.py video.mp4 "标题" "文案" "标签"
@@ -66,11 +66,11 @@ shipinhao_upload/
 │   └── browser.py  # 浏览器
 ├── utils/
 │   └── log.py
-└── cookies/        # 登录态（已统一到根 cookies/shipinhao/）
+└── cookies/        # 导出 cookie 在 cookies/shipinhao/；connect 登录目录在 cookies/chrome_connect_sph/
 ```
 
 ## 环境变量
 
-- `AUTH_MODE`：profile（默认）/ cookie / connect
+- `AUTH_MODE`：当前视频号固定走 `connect`
 - `LOCAL_CHROME_PATH`：Chrome 路径
-- `CDP_DEBUG_PORT`：调试端口，默认 9222
+- `CDP_DEBUG_PORT`：视频号固定使用 9226

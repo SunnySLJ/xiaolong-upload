@@ -18,7 +18,10 @@ if str(_SCRIPTS) not in sys.path:
 
 from common.console import ensure_console_ready, safe_print
 from upload import upload
-from platform_login import check_platform_login, login_instruction
+try:
+    from scripts.platform_login import check_platform_login, login_instruction
+except ImportError:
+    from platform_login import check_platform_login, login_instruction
 
 ensure_console_ready()
 

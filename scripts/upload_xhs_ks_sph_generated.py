@@ -14,7 +14,10 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from common.console import ensure_console_ready, safe_print
-from platform_login import check_platform_login, login_instruction
+try:
+    from scripts.platform_login import check_platform_login, login_instruction
+except ImportError:
+    from platform_login import check_platform_login, login_instruction
 
 ensure_console_ready()
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 
@@ -26,12 +27,19 @@ def _load_auth_module():
 _AUTH = _load_auth_module()
 
 
+def _default_root() -> Path:
+    env_root = (os.environ.get("OPENCLAW_UPLOAD_ROOT") or "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return PROJECT_ROOT.resolve()
+
+
 def check_platform_login(
     platform_name: str,
     project_root: Path | None = None,
     passive: bool = False,
 ) -> tuple[bool, str]:
-    root = project_root or PROJECT_ROOT
+    root = (project_root or _default_root()).resolve()
     return _AUTH.check_platform_login(platform_name, root, passive=passive)
 
 
@@ -41,7 +49,7 @@ def ensure_platform_login(
     timeout: int = 300,
     notify_wechat: bool = False,
 ) -> tuple[bool, str]:
-    root = project_root or PROJECT_ROOT
+    root = (project_root or _default_root()).resolve()
     _AUTH._PROJECT_ROOT_OVERRIDE = root
     return _AUTH.ensure_platform_login(
         platform_name,
